@@ -87,17 +87,44 @@ Lumen/
 ## Quick start
 
 ```bash
-# 1. Install Rust if you haven't (one-time)
+# 1. Install Rust (one-time)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
-# 2. Build the workspace (stubs compile clean)
+# 2. Build the workspace (35 crates, ~70s cold)
 cd ~/Lumen
-cargo check --workspace
+cargo build --bin cli
 
-# 3. Run the CLI placeholder
-cargo run --bin cli
+# 3. Probe an image
+./target/debug/cli probe path/to/photo.png
+
+# 4. List the registered effects (Phase 1: 11 effects, 7 categories)
+./target/debug/cli list-effects
+
+# 5. Apply a single effect
+./target/debug/cli apply \
+    --input  in.png  --output out.png \
+    --effect lumen-fx-exposure.brightness_contrast \
+    --param  brightness=0.15 --param contrast=1.3
+
+# 6. Run a multi-stage pipeline from a JSON recipe
+cat > recipe.json <<'EOF'
+{
+  "input":  "in.png",
+  "output": "out.png",
+  "chain": [
+    { "effect": "lumen-fx-denoise.gaussian",         "params": { "sigma": 0.6 } },
+    { "effect": "lumen-fx-sharpen.unsharp_mask",     "params": { "amount": 1.4, "radius": 1.2 } },
+    { "effect": "lumen-fx-color.saturation",         "params": { "amount": 1.25 } },
+    { "effect": "lumen-fx-exposure.brightness_contrast", "params": { "brightness": 0.05, "contrast": 1.1 } },
+    { "effect": "lumen-fx-upscale.bicubic",          "params": { "scale": 2.0 } }
+  ]
+}
+EOF
+./target/debug/cli pipeline --recipe recipe.json
 ```
+
+See [`docs/PIPELINE.md`](docs/PIPELINE.md) for the full recipe format.
 
 ## Roadmap (high-level)
 

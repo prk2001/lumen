@@ -10,8 +10,10 @@
 #![warn(rust_2018_idioms)]
 
 pub mod brightness_contrast;
+pub mod gamma;
 
 pub use brightness_contrast::BrightnessContrast;
+pub use gamma::Gamma;
 
 use lumen_core::{EffectRegistry, Result};
 use std::sync::Arc;
@@ -19,6 +21,7 @@ use std::sync::Arc;
 /// Register every effect this crate provides into the supplied registry.
 pub fn register_all(registry: &EffectRegistry) -> Result<()> {
     registry.register(Arc::new(BrightnessContrast))?;
+    registry.register(Arc::new(Gamma))?;
     Ok(())
 }
 

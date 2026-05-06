@@ -15,6 +15,14 @@ lumen-fx-color = { path = "../lumen-fx-color" }
 lumen-fx-sharpen = { path = "../lumen-fx-sharpen" }
 lumen-fx-denoise = { path = "../lumen-fx-denoise" }
 lumen-fx-geometric = { path = "../lumen-fx-geometric" }
+lumen-fx-upscale = { path = "../lumen-fx-upscale" }
+lumen-fx-mask = { path = "../lumen-fx-mask" }
+lumen-fx-stabilize = { path = "../lumen-fx-stabilize" }
+lumen-fx-deblur = { path = "../lumen-fx-deblur" }
+lumen-fx-temporal = { path = "../lumen-fx-temporal" }
+lumen-fx-weather = { path = "../lumen-fx-weather" }
+tokio.workspace = true
+axum.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

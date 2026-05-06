@@ -7,6 +7,10 @@
 //! - `apply --input X --output Y --effect ID [--param k=v]…`
 //!   decode → effect → encode for one still image.
 //! - `pipeline --recipe R.json` — run a multi-effect chain from JSON.
+//! - `serve --recipe R.json [--port 8080]` — live HTTP preview that
+//!   re-renders on file changes and shows side-by-side input / output.
+
+mod serve;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -72,6 +76,19 @@ enum Command {
         #[arg(long, default_value_t = 92)]
         jpeg_quality: u8,
     },
+    /// Run a live-preview HTTP server that re-renders the recipe on
+    /// file changes and shows input/output side-by-side at /.
+    Serve {
+        /// Path to a JSON recipe.
+        #[arg(long)]
+        recipe: PathBuf,
+        /// TCP port to bind on 127.0.0.1.
+        #[arg(long, default_value_t = 8723)]
+        port: u16,
+        /// JPEG quality if the output is a JPEG.
+        #[arg(long, default_value_t = 92)]
+        jpeg_quality: u8,
+    },
 }
 
 fn main() -> ExitCode {
@@ -94,6 +111,14 @@ fn run(cli: Cli) -> Result<()> {
             cmd_apply(&input, &output, &effect, &params, jpeg_quality)
         }
         Command::Pipeline { recipe, jpeg_quality } => cmd_pipeline(&recipe, jpeg_quality),
+        Command::Serve { recipe, port, jpeg_quality } => {
+            let registry = build_registry()?;
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .context("tokio runtime")?;
+            rt.block_on(serve::run(recipe, port, jpeg_quality, registry))
+        }
     }
 }
 
@@ -127,6 +152,12 @@ fn build_registry() -> Result<EffectRegistry> {
     lumen_fx_sharpen::register_all(&r).map_err(|e| anyhow!("register sharpen: {e}"))?;
     lumen_fx_denoise::register_all(&r).map_err(|e| anyhow!("register denoise: {e}"))?;
     lumen_fx_geometric::register_all(&r).map_err(|e| anyhow!("register geometric: {e}"))?;
+    lumen_fx_upscale::register_all(&r).map_err(|e| anyhow!("register upscale: {e}"))?;
+    lumen_fx_mask::register_all(&r).map_err(|e| anyhow!("register mask: {e}"))?;
+    lumen_fx_stabilize::register_all(&r).map_err(|e| anyhow!("register stabilize: {e}"))?;
+    lumen_fx_deblur::register_all(&r).map_err(|e| anyhow!("register deblur: {e}"))?;
+    lumen_fx_temporal::register_all(&r).map_err(|e| anyhow!("register temporal: {e}"))?;
+    lumen_fx_weather::register_all(&r).map_err(|e| anyhow!("register weather: {e}"))?;
     Ok(r)
 }
 
@@ -188,25 +219,25 @@ fn cmd_apply(
 /// Linear-chain recipe format. Phase 1 supports linear chains only;
 /// branched DAGs land alongside multi-input effects in Phase 3.
 #[derive(Debug, Serialize, Deserialize)]
-struct Recipe {
+pub(crate) struct Recipe {
     /// Input file path (relative to the recipe file or absolute).
-    input: PathBuf,
+    pub input: PathBuf,
     /// Output file path.
-    output: PathBuf,
+    pub output: PathBuf,
     /// Ordered list of effects to apply.
-    chain: Vec<RecipeStep>,
+    pub chain: Vec<RecipeStep>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct RecipeStep {
+pub(crate) struct RecipeStep {
     /// Effect id (e.g. `"lumen-fx-denoise.gaussian"`).
-    effect: String,
+    pub effect: String,
     /// Optional human label.
     #[serde(default)]
-    label: Option<String>,
+    pub label: Option<String>,
     /// Parameter values keyed by parameter id.
     #[serde(default)]
-    params: serde_json::Value,
+    pub params: serde_json::Value,
 }
 
 fn cmd_pipeline(recipe_path: &std::path::Path, jpeg_quality: u8) -> Result<()> {
@@ -293,7 +324,7 @@ fn cmd_pipeline(recipe_path: &std::path::Path, jpeg_quality: u8) -> Result<()> {
     Ok(())
 }
 
-fn json_to_param(v: &serde_json::Value) -> Option<ParamValue> {
+pub(crate) fn json_to_param(v: &serde_json::Value) -> Option<ParamValue> {
     match v {
         serde_json::Value::Bool(b) => Some(ParamValue::Bool(*b)),
         serde_json::Value::Number(n) => {
@@ -323,8 +354,8 @@ fn parse_param_value(s: &str) -> ParamValue {
 
 // Newtype wrappers so we can implement the foreign SourceLoader / SinkWriter
 // traits for closures. The orphan rule forbids `impl<F> Trait for F`.
-struct CliSource<F>(F);
-struct CliSink<F>(F);
+pub(crate) struct CliSource<F>(pub(crate) F);
+pub(crate) struct CliSink<F>(pub(crate) F);
 
 impl<F> SourceLoader for CliSource<F>
 where
