@@ -1,6 +1,6 @@
 [package]
 name = "lumen-core"
-description = "Core types, pipeline DAG, error model, project file format"
+description = "Core types, pipeline DAG, error model, project file format for Lumen"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,15 @@ repository.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 tracing.workspace = true
+half = { workspace = true, features = ["serde", "bytemuck"] }
+time = { workspace = true, features = ["formatting", "parsing", "macros"] }
+bytemuck.workspace = true
+parking_lot.workspace = true
+blake3.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

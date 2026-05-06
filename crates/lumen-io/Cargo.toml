@@ -1,6 +1,6 @@
 [package]
 name = "lumen-io"
-description = "Input handling: FFmpeg, RAW, HEIF/HEIC, AVIF, JPEG XL, TIFF, EXR, DPX, ProRes"
+description = "Input/output: still images now (image crate); FFmpeg, RAW, HEIF/AVIF/JXL come in later milestones"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,3 +11,9 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+serde.workspace = true
+image = { workspace = true, features = ["png", "jpeg", "tiff", "webp", "bmp"] }
+blake3.workspace = true
+
+[dev-dependencies]
+tempfile = "3.13"
