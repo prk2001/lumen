@@ -13,11 +13,14 @@ lumen-io = { path = "../lumen-io" }
 lumen-fx-exposure = { path = "../lumen-fx-exposure" }
 lumen-fx-color = { path = "../lumen-fx-color" }
 lumen-fx-sharpen = { path = "../lumen-fx-sharpen" }
+lumen-fx-denoise = { path = "../lumen-fx-denoise" }
+lumen-fx-geometric = { path = "../lumen-fx-geometric" }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [[bin]]

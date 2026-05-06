@@ -23,6 +23,7 @@ pub mod graph;
 pub mod params;
 pub mod project;
 pub mod registry;
+pub mod scheduler;
 pub mod time;
 
 pub use asset::{Asset, AssetId, AssetKind, AssetMetadata};
@@ -35,6 +36,7 @@ pub use graph::{Graph, Node, NodeId};
 pub use params::{ParamKind, ParamSpec, ParamValue, ParamValues};
 pub use project::{Project, SCHEMA};
 pub use registry::EffectRegistry;
+pub use scheduler::{ClosureIo, Scheduler, SinkWriter, SourceLoader};
 pub use time::{Pts, Rational};
 
 /// Crate-level version string surfaced for diagnostics.
