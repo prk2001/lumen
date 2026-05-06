@@ -1,0 +1,80 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/dist/
+apps/desktop/node_modules/
+
+# Web app
+apps/web/dist/
+apps/web/node_modules/
+
+# Cloud
+apps/cloud/target/
+
+# Node
+node_modules/
+.pnpm-store/
+.npm/
+
+# UI build output
+ui/dist/
+ui/node_modules/
+
+# Models — large binary blobs, downloaded on demand
+models/cache/
+models/downloads/
+*.onnx
+*.pt
+*.safetensors
+*.ckpt
+*.bin
+!models/registry/*.json
+
+# Local state
+*.log
+.lumen-cache/
+.lumen-tmp/
+*.lumenproj.bak
+
+# Editor / IDE
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+secrets/
+*.pem
+*.key
+!docs/**/*.key.example
+
+# Test artifacts
+tarpaulin-report.html
+cobertura.xml
+coverage/
+*.profraw
+
+# Profiling
+flamegraph.svg
+perf.data*
+*.dtps
+
+# OS junk
+.AppleDouble
+.LSOverride
+Icon
+
+# Generated docs
+/docs-out/
+/target/doc/

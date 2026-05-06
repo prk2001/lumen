@@ -1,0 +1,17 @@
+[package]
+name = "lumen-server"
+description = "Cloud / SaaS HTTP server binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[[bin]]
+name = "server"
+path = "src/main.rs"

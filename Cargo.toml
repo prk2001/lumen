@@ -1,0 +1,118 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lumen-core",
+    "crates/lumen-io",
+    "crates/lumen-color",
+    "crates/lumen-gpu",
+    "crates/lumen-ai",
+    "crates/lumen-playback",
+    "crates/lumen-fx-exposure",
+    "crates/lumen-fx-color",
+    "crates/lumen-fx-sharpen",
+    "crates/lumen-fx-denoise",
+    "crates/lumen-fx-compression",
+    "crates/lumen-fx-geometric",
+    "crates/lumen-fx-stabilize",
+    "crates/lumen-fx-deblur",
+    "crates/lumen-fx-upscale",
+    "crates/lumen-fx-temporal",
+    "crates/lumen-fx-ai",
+    "crates/lumen-fx-face",
+    "crates/lumen-fx-text",
+    "crates/lumen-fx-mask",
+    "crates/lumen-fx-weather",
+    "crates/lumen-fx-modalities",
+    "crates/lumen-measure",
+    "crates/lumen-audio",
+    "crates/lumen-auth",
+    "crates/lumen-workflow",
+    "crates/lumen-collab",
+    "crates/lumen-report",
+    "crates/lumen-export",
+    "crates/lumen-perf",
+    "crates/lumen-api",
+    "crates/lumen-platform",
+    "crates/lumen-qa",
+    "crates/lumen-cli",
+    "crates/lumen-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Patrick Kennedy <patrick@primorispartners.com>"]
+repository = "https://github.com/primoris/lumen"
+rust-version = "1.78"
+
+[workspace.dependencies]
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# IDs
+uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
+
+# Logging / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Server
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+
+# Numeric / data
+ndarray = "0.16"
+half = "2.4"
+num-traits = "0.2"
+bytemuck = { version = "1.18", features = ["derive"] }
+
+# I/O — heavy deps gated behind features in their owning crates
+image = "0.25"
+# ffmpeg-next, ort, wgpu, opencv pulled in per-crate as features stabilize.
+# rawloader / kamadak-exif etc. follow same pattern.
+
+# Hashing / integrity (Cat 22 Authentication)
+sha2 = "0.10"
+blake3 = "1.5"
+
+# Time
+time = { version = "0.3", features = ["serde", "macros"] }
+
+# Concurrency primitives
+parking_lot = "0.12"
+crossbeam = "0.8"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+
+[profile.dev]
+opt-level = 1
+debug = "limited"
+
+[profile.dev.package."*"]
+opt-level = 3

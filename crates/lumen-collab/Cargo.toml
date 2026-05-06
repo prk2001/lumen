@@ -1,0 +1,13 @@
+[package]
+name = "lumen-collab"
+description = "Collaboration & project management: shares, reviews, locks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+thiserror.workspace = true
+tracing.workspace = true

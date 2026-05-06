@@ -1,0 +1,13 @@
+[package]
+name = "lumen-qa"
+description = "QA & monitoring: golden frames, fuzz, regression, telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+thiserror.workspace = true
+tracing.workspace = true

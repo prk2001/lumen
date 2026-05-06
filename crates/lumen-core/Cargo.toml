@@ -1,0 +1,15 @@
+[package]
+name = "lumen-core"
+description = "Core types, pipeline DAG, error model, project file format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+tracing.workspace = true

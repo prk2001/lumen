@@ -1,0 +1,124 @@
+# Lumen
+
+> **Professional-grade photo and video enhancement, end to end.**
+
+Lumen is an open architecture for image and video enhancement that spans
+**ingest, restoration, AI super-resolution, color grading, forensic
+clarification, audio cleanup, measurement, and delivery** — across **desktop,
+CLI, web, and cloud** from a single Rust core.
+
+It is built from a 30-category, ~1,140-feature engineering spec
+([`docs/FEATURES.md`](docs/FEATURES.md)) and intended to grow toward parity
+with the union of Topaz Labs, DaVinci Resolve, and Adobe Bridge over a
+multi-year roadmap.
+
+## Status
+
+**Phase 0 — Scaffolding.** Workspace, crate skeleton, and roadmap docs are in
+place. No feature code is implemented yet. See
+[`docs/PLAN.md`](docs/PLAN.md) for the phased build plan.
+
+## Why this stack
+
+A single Rust core ships everywhere:
+
+| Target              | Crate / app                 | Status         |
+| ------------------- | --------------------------- | -------------- |
+| Desktop (Mac/Win/Linux) | `apps/desktop` (Tauri 2 + React) | scaffolding |
+| Command-line        | `crates/lumen-cli`          | scaffolding |
+| Web                 | `apps/web` (WASM core + React)   | planned     |
+| Cloud / SaaS        | `crates/lumen-server` + `apps/cloud` | scaffolding |
+| Plugin SDK          | `crates/lumen-api`          | planned     |
+
+The same pipeline graph runs in every target.
+
+## Repository layout
+
+```text
+Lumen/
+├── crates/                 # 35 Rust crates, one per spec category + infra
+│   ├── lumen-core/         #  shared types, pipeline DAG, project model
+│   ├── lumen-io/           #  Cat 1   Input, Formats & Codecs
+│   ├── lumen-playback/     #  Cat 2   Playback & Navigation
+│   ├── lumen-color/        #  infra   OpenColorIO, color science
+│   ├── lumen-gpu/          #  infra   wgpu compute kernels
+│   ├── lumen-ai/           #  infra   ONNX inference
+│   ├── lumen-fx-exposure/  #  Cat 4   Exposure, Tone & Dynamic Range
+│   ├── lumen-fx-color/     #  Cat 5   Color Science & Grading
+│   ├── lumen-fx-sharpen/   #  Cat 6   Sharpening & Detail Recovery
+│   ├── lumen-fx-denoise/   #  Cat 7   Noise Reduction & Cleanup
+│   ├── lumen-fx-compression#  Cat 8   Compression Artifact Removal
+│   ├── lumen-fx-geometric/ #  Cat 9   Geometric & Lens Correction
+│   ├── lumen-fx-stabilize/ #  Cat 10  Stabilization & Motion Correction
+│   ├── lumen-fx-deblur/    #  Cat 11  Deblurring & Deconvolution
+│   ├── lumen-fx-upscale/   #  Cat 12  Super-Resolution & Upscaling
+│   ├── lumen-fx-temporal/  #  Cat 13  Frame Rate & Temporal
+│   ├── lumen-fx-ai/        #  Cat 14  AI-Powered Enhancement
+│   ├── lumen-fx-face/      #  Cat 15  Face / Skin / Portrait
+│   ├── lumen-fx-text/      #  Cat 16  Text / Plate / Object Clarification
+│   ├── lumen-fx-mask/      #  Cat 17  Masking / Selection / ROI
+│   ├── lumen-fx-weather/   #  Cat 18  Weather / Atmospheric / Environmental
+│   ├── lumen-fx-modalities #  Cat 19  Advanced Imaging Modalities
+│   ├── lumen-measure/      #  Cat 20  Measurement & Analysis
+│   ├── lumen-audio/        #  Cat 21  Audio Enhancement
+│   ├── lumen-auth/         #  Cat 22  Authentication & Integrity
+│   ├── lumen-workflow/     #  Cat 23  Workflow & Non-Destructive
+│   ├── lumen-collab/       #  Cat 24  Collaboration & Project Management
+│   ├── lumen-report/       #  Cat 25  Reporting / Visualization / Presentation
+│   ├── lumen-export/       #  Cat 26  Export / Delivery / Encoding
+│   ├── lumen-perf/         #  Cat 27  Performance & Hardware
+│   ├── lumen-api/          #  Cat 28  Extensibility / Automation / API
+│   ├── lumen-platform/     #  Cat 29  Platform & Distribution
+│   ├── lumen-qa/           #  Cat 30  Quality Assurance & Monitoring
+│   ├── lumen-cli/          #  CLI binary
+│   └── lumen-server/       #  Cloud / SaaS server binary
+├── apps/
+│   ├── desktop/            # Tauri 2 + React desktop app
+│   ├── web/                # Browser app (WASM core)
+│   └── cloud/              # Cloud deployment manifests
+├── ui/                     # Shared React component library
+├── models/                 # ONNX model registry & download manifests
+├── plugins/                # First-party + example plugins
+├── docs/                   # Architecture, plans, specs
+├── scripts/                # Generators, build helpers
+└── assets/                 # Brand, icons, sample media
+```
+
+## Quick start
+
+```bash
+# 1. Install Rust if you haven't (one-time)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. Build the workspace (stubs compile clean)
+cd ~/Lumen
+cargo check --workspace
+
+# 3. Run the CLI placeholder
+cargo run --bin cli
+```
+
+## Roadmap (high-level)
+
+See [`docs/PLAN.md`](docs/PLAN.md) for the full phased plan with milestones
+and acceptance criteria. Summary:
+
+- **Phase 0** (now)        — Scaffold, docs, CI, plugin contract
+- **Phase 1** (months 1–3) — Ingest → preview → minimal color/exposure → export
+- **Phase 2** (months 4–6) — AI denoise, AI upscale, face restore (ONNX models)
+- **Phase 3** (months 7–9) — Color grading, masking, complex pipeline graphs
+- **Phase 4** (months 10–12) — Stabilization, deflicker, motion-aware effects
+- **Phase 5** (year 2)     — Forensic, audio, collaboration, cloud
+- **Phase 6** (year 2+)    — Plugin SDK, mobile, marketplace
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE).
+
+Source feature spec lives in
+`/Users/patrickkennedy/Downloads/features_5levels.md` and
+`/Users/patrickkennedy/Downloads/features_5levels_part2.md`. A summary is in
+[`docs/FEATURES.md`](docs/FEATURES.md).
+
+— Primoris Partners LLC
