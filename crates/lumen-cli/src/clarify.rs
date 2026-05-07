@@ -51,6 +51,23 @@ struct Params {
     /// Number of unsharp passes. 1 = single pass; 2-3 = iterative
     /// sharpening with decreasing amount each pass.
     unsharp_passes: i64,
+    /// Richardson-Lucy iterative deconvolution sigma. 0.0 disables.
+    /// RL is real iterative ML deconvolution — more faithful than
+    /// Wiener for non-Gaussian PSFs and severely-blurred inputs.
+    rl_psf_sigma: f64,
+    /// Richardson-Lucy iteration count. More iterations = sharper
+    /// but more noise amplification.
+    rl_iterations: i64,
+    /// Richardson-Lucy damping (Biggs-Andrews). 0 = full update,
+    /// 0.3-0.5 = stable on noisy inputs.
+    rl_damping: f64,
+    /// If true, swap the pre-Wiener Gaussian for edge-preserving
+    /// bilateral. Bilateral keeps real edges sharp before deconvolution.
+    use_bilateral_pre: bool,
+    /// If true, swap the post-CLAHE Gaussian for bilateral too.
+    use_bilateral_post: bool,
+    /// Lanczos upscale factor for the upscale step (when --upscale).
+    upscale_factor: f64,
 }
 
 /// Tuned for fidelity: dehaze strengths capped, with a second denoise
@@ -74,6 +91,12 @@ fn params_for(strength: &str) -> Params {
             wiener_psf_sigma: 0.0,
             wiener_nsr: 0.05,
             unsharp_passes: 1,
+            rl_psf_sigma: 0.0,
+            rl_iterations: 0,
+            rl_damping: 0.0,
+            use_bilateral_pre: false,
+            use_bilateral_post: false,
+            upscale_factor: 2.0,
         },
         "aggressive" => Params {
             nr_sigma: 0.9,
@@ -88,6 +111,12 @@ fn params_for(strength: &str) -> Params {
             wiener_psf_sigma: 1.1,   // assume mild Gaussian blur
             wiener_nsr: 0.012,
             unsharp_passes: 2,
+            rl_psf_sigma: 0.0,
+            rl_iterations: 0,
+            rl_damping: 0.0,
+            use_bilateral_pre: false,
+            use_bilateral_post: false,
+            upscale_factor: 2.0,
         },
         // "plate" / "extreme" — tuned for text + license-plate readability.
         // Wiener inverts the assumed PSF (real deblur), small CLAHE
@@ -108,6 +137,42 @@ fn params_for(strength: &str) -> Params {
             wiener_psf_sigma: 1.5,   // assume moderate Gaussian blur in the source
             wiener_nsr: 0.02,        // a bit more regularization than aggressive
             unsharp_passes: 3,       // three iterations of decreasing-amount sharpen
+            rl_psf_sigma: 0.0,
+            rl_iterations: 0,
+            rl_damping: 0.0,
+            use_bilateral_pre: false,
+            use_bilateral_post: false,
+            upscale_factor: 2.0,
+        },
+        // "forensic" / "police" — the maximum-fidelity tier. Targeted at
+        // genuine evidence work: bilateral preserves edges through both
+        // denoise passes (no Gaussian blur of real edges before deblur),
+        // Wiener gives a closed-form first pass at the linear inverse,
+        // Richardson-Lucy then refines iteratively (real ML deconvolution
+        // — not edge-enhancement; provably converges to a local-MAP estimate
+        // for Poisson noise), three sharpen passes recover micro-detail,
+        // and 4x Lanczos gives 16x the pixel area for human + OCR review.
+        // The chain is INTENTIONALLY conservative: each step does its real
+        // job, no step fabricates structure that wasn't in the input.
+        "forensic" | "police" => Params {
+            nr_sigma: 0.0,           // unused — bilateral_pre takes over
+            deblock_strength: 0.7,
+            dehaze_omega: 0.72,      // mild — RL handles most clarification
+            clahe_clip: 1.6,         // very conservative — preserves global tone
+            clahe_tiles: 16,
+            laplacian_amount: 0.0,   // skip — Wiener+RL are the real deblurs
+            unsharp_amount: 0.45,
+            bc_contrast: 1.10,
+            cleanup_sigma: 0.0,      // unused — bilateral_post takes over
+            wiener_psf_sigma: 1.4,   // first-pass closed-form inverse
+            wiener_nsr: 0.025,
+            unsharp_passes: 3,
+            rl_psf_sigma: 1.4,       // matches Wiener PSF — second-pass refinement
+            rl_iterations: 12,       // enough to recover detail, few enough to stay stable
+            rl_damping: 0.35,        // Biggs-Andrews damping — stabilizes on noisy CCTV
+            use_bilateral_pre: true,
+            use_bilateral_post: true,
+            upscale_factor: 4.0,     // 16x pixel area for forensic review
         },
         _ => Params {
             // "standard"
@@ -123,6 +188,12 @@ fn params_for(strength: &str) -> Params {
             wiener_psf_sigma: 0.0,
             wiener_nsr: 0.05,
             unsharp_passes: 1,
+            rl_psf_sigma: 0.0,
+            rl_iterations: 0,
+            rl_damping: 0.0,
+            use_bilateral_pre: false,
+            use_bilateral_post: false,
+            upscale_factor: 2.0,
         },
     }
 }
@@ -134,49 +205,82 @@ pub fn build_clarify_recipe(
     upscale: bool,
 ) -> Result<Recipe> {
     let p = params_for(strength);
-    let mut chain: Vec<RecipeStep> = vec![
-        // 1. Pre-clean: kill sensor noise that would amplify in dehaze.
-        RecipeStep {
+    let mut chain: Vec<RecipeStep> = Vec::new();
+
+    // 1. Pre-clean: kill sensor noise that would amplify in dehaze.
+    //    Forensic mode swaps Gaussian for edge-preserving bilateral —
+    //    real edges (text, plates, faces) survive intact into the
+    //    deconvolution stages.
+    if p.use_bilateral_pre {
+        chain.push(RecipeStep {
+            effect: "lumen-fx-denoise.bilateral".into(),
+            label: Some("clarify bilateral (pre)".into()),
+            params: json!({
+                "sigma_spatial": 2.0,
+                "sigma_range": 0.08,
+                "radius": 3,
+            }),
+        });
+    } else {
+        chain.push(RecipeStep {
             effect: "lumen-fx-denoise.gaussian".into(),
             label: Some("clarify denoise (pre)".into()),
             params: json!({ "sigma": p.nr_sigma }),
-        },
-        // 2. Soften JPEG/H.264 block edges.
-        RecipeStep {
-            effect: "lumen-fx-compression.deblock".into(),
-            label: Some("clarify deblock".into()),
-            params: json!({ "block_size": 8, "strength": p.deblock_strength }),
-        },
-        // 3. Dehaze with capped omega — Phase 1 used 0.95 which exposed
-        //    every bit of noise; 0.55-0.80 keeps it honest.
-        RecipeStep {
-            effect: "lumen-fx-weather.dehaze_dcp".into(),
-            label: Some("clarify dehaze".into()),
+        });
+    }
+
+    // 2. Soften JPEG/H.264 block edges.
+    chain.push(RecipeStep {
+        effect: "lumen-fx-compression.deblock".into(),
+        label: Some("clarify deblock".into()),
+        params: json!({ "block_size": 8, "strength": p.deblock_strength }),
+    });
+
+    // 3. Dehaze with capped omega — Phase 1 used 0.95 which exposed
+    //    every bit of noise; 0.55-0.80 keeps it honest.
+    chain.push(RecipeStep {
+        effect: "lumen-fx-weather.dehaze_dcp".into(),
+        label: Some("clarify dehaze".into()),
+        params: json!({
+            "omega": p.dehaze_omega,
+            "t0": 0.15,
+            "patch_radius": 5,
+        }),
+    });
+
+    // 4. CLAHE for local contrast — clip-limit reduced from 4.0 → 2.5
+    //    so quiet regions don't get histogram-blown into noise fields.
+    chain.push(RecipeStep {
+        effect: "lumen-fx-text.clahe".into(),
+        label: Some("clarify CLAHE".into()),
+        params: json!({
+            "tiles_x": p.clahe_tiles,
+            "tiles_y": p.clahe_tiles,
+            "clip_limit": p.clahe_clip,
+        }),
+    });
+
+    // 5. Cleanup denoise — the single biggest fidelity safeguard.
+    //    Dehaze + CLAHE inevitably amplify noise; this pass mops it up.
+    //    Forensic mode again uses bilateral to keep newly-revealed
+    //    edges crisp going into deconvolution.
+    if p.use_bilateral_post {
+        chain.push(RecipeStep {
+            effect: "lumen-fx-denoise.bilateral".into(),
+            label: Some("clarify bilateral (post)".into()),
             params: json!({
-                "omega": p.dehaze_omega,
-                "t0": 0.15,
-                "patch_radius": 5,
+                "sigma_spatial": 1.5,
+                "sigma_range": 0.06,
+                "radius": 2,
             }),
-        },
-        // 4. CLAHE for local contrast — clip-limit reduced from 4.0 → 2.5
-        //    so quiet regions don't get histogram-blown into noise fields.
-        RecipeStep {
-            effect: "lumen-fx-text.clahe".into(),
-            label: Some("clarify CLAHE".into()),
-            params: json!({
-                "tiles_x": p.clahe_tiles,
-                "tiles_y": p.clahe_tiles,
-                "clip_limit": p.clahe_clip,
-            }),
-        },
-        // 5. Cleanup denoise — the single biggest fidelity safeguard.
-        //    Dehaze + CLAHE inevitably amplify noise; this pass mops it up.
-        RecipeStep {
+        });
+    } else {
+        chain.push(RecipeStep {
             effect: "lumen-fx-denoise.gaussian".into(),
             label: Some("clarify denoise (post)".into()),
             params: json!({ "sigma": p.cleanup_sigma }),
-        },
-    ];
+        });
+    }
 
     // 6. Wiener deconvolution — real inverse filtering for the assumed
     //    PSF. Recovers detail that was actually there in the original;
@@ -190,6 +294,23 @@ pub fn build_clarify_recipe(
                 "sigma": p.wiener_psf_sigma,
                 "nsr": p.wiener_nsr,
                 "iterations": 1,
+            }),
+        });
+    }
+
+    // 6b. Richardson-Lucy iterative deconvolution — refines what Wiener
+    //     started. RL is provably non-negative and converges to a
+    //     local-MAP estimate under Poisson noise; unlike Wiener it
+    //     handles non-Gaussian PSFs and doesn't ring on hard edges.
+    //     Damped (Biggs-Andrews) to stay stable on noisy CCTV input.
+    if p.rl_psf_sigma > 0.0 && p.rl_iterations > 0 {
+        chain.push(RecipeStep {
+            effect: "lumen-fx-deblur.richardson_lucy".into(),
+            label: Some("clarify richardson-lucy".into()),
+            params: json!({
+                "sigma": p.rl_psf_sigma,
+                "iterations": p.rl_iterations,
+                "damping": p.rl_damping,
             }),
         });
     }
@@ -238,10 +359,12 @@ pub fn build_clarify_recipe(
     });
 
     if upscale {
-        // Plate strength upscales 2x with Lanczos (sharper) instead of
-        // Mitchell — better for getting more pixels per character.
-        let (eff, scale) = if matches!(strength, "plate" | "extreme") {
-            ("lumen-fx-upscale.lanczos", 2.0)
+        // Plate / forensic upscale with Lanczos (sharper than bicubic) —
+        // forensic uses 4x for 16x pixel area, plate stays at 2x. The
+        // bicubic path remains the default for light/standard/aggressive.
+        let lanczos_strength = matches!(strength, "plate" | "extreme" | "forensic" | "police");
+        let (eff, scale) = if lanczos_strength {
+            ("lumen-fx-upscale.lanczos", p.upscale_factor)
         } else {
             ("lumen-fx-upscale.bicubic", 2.0)
         };
@@ -325,6 +448,60 @@ mod tests {
             .filter(|s| s.effect == "lumen-fx-sharpen.unsharp_mask")
             .count();
         assert_eq!(passes, 3, "plate should have 3 unsharp passes");
+    }
+
+    #[test]
+    fn forensic_strength_is_the_full_chain() {
+        let r = build_clarify_recipe(
+            std::path::Path::new("/tmp/in.png"),
+            std::path::Path::new("/tmp/out.png"),
+            "forensic",
+            true,
+        )
+        .unwrap();
+        let ids: Vec<&str> = r.chain.iter().map(|s| s.effect.as_str()).collect();
+        // Bilateral pre + post (no Gaussian denoise in forensic).
+        assert_eq!(
+            r.chain
+                .iter()
+                .filter(|s| s.effect == "lumen-fx-denoise.bilateral")
+                .count(),
+            2,
+            "forensic must use bilateral pre + post; got chain {ids:?}"
+        );
+        assert_eq!(
+            r.chain
+                .iter()
+                .filter(|s| s.effect == "lumen-fx-denoise.gaussian")
+                .count(),
+            0,
+            "forensic must NOT use Gaussian denoise; got chain {ids:?}"
+        );
+        // Both Wiener and Richardson-Lucy.
+        assert!(ids.contains(&"lumen-fx-deblur.wiener"), "missing Wiener");
+        assert!(
+            ids.contains(&"lumen-fx-deblur.richardson_lucy"),
+            "forensic must include Richardson-Lucy"
+        );
+        // 3 unsharp passes.
+        assert_eq!(
+            r.chain
+                .iter()
+                .filter(|s| s.effect == "lumen-fx-sharpen.unsharp_mask")
+                .count(),
+            3
+        );
+        // 4x Lanczos upscale.
+        let upscale = r
+            .chain
+            .iter()
+            .find(|s| s.effect == "lumen-fx-upscale.lanczos")
+            .expect("forensic must use Lanczos upscale when --upscale");
+        assert!(
+            (upscale.params.get("scale").and_then(|v| v.as_f64()).unwrap() - 4.0).abs() < 1e-9,
+            "forensic must upscale 4x; got params {:?}",
+            upscale.params
+        );
     }
 
     #[test]

@@ -593,6 +593,18 @@
       laplacian_amount: 0.4, unsharp_amount: 0.6, unsharp_passes: 3,
       bc_contrast: 1.12, upscale: true,
     },
+    forensic: {
+      // Forensic / police-grade preview — same kernels as plate but
+      // with conservative dehaze + extra-careful cleanup. The browser
+      // demo can't run Wiener / Richardson-Lucy (no FFT shipped to JS)
+      // so the in-page preview shows what the spatial chain alone gets
+      // you. The CLI runs the full chain (lumen clarify --strength
+      // forensic --upscale) for the actual military/police-grade output.
+      nr_sigma: 0.8, deblock_strength: 0.7, dehaze_omega: 0.72,
+      clahe_clip: 1.6, clahe_tiles: 16, cleanup_sigma: 0.5,
+      laplacian_amount: 0.0, unsharp_amount: 0.45, unsharp_passes: 3,
+      bc_contrast: 1.10, upscale: false,
+    },
   };
 
   function buildClarifyChain(strength) {

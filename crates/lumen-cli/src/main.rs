@@ -349,7 +349,9 @@ enum Command {
     Clarify {
         #[arg(long)] input: PathBuf,
         #[arg(long)] output: PathBuf,
-        /// Strength of the chain: light / standard / aggressive.
+        /// Strength of the chain: light / standard / aggressive / plate /
+        /// forensic. Forensic is the maximum-fidelity tier (bilateral +
+        /// Wiener + Richardson-Lucy + 4x Lanczos) for evidence work.
         #[arg(long, default_value = "standard")] strength: String,
         /// 2x bicubic upscale at the end (default true).
         #[arg(long, default_value_t = true)] upscale: bool,
