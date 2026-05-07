@@ -476,6 +476,9 @@
     </div>
 
     <div class="auto-row">
+      <button class="btn auto" id="demo-smart" type="button" title="Analyze the input, decide whether it's a normal photo or a degraded CCTV grab, and apply the right preset automatically.">
+        ✦ Smart Auto
+      </button>
       <button class="btn auto" id="demo-auto" type="button">Auto-Enhance</button>
       <button class="btn auto" id="demo-clarify" type="button" style="background:linear-gradient(180deg,#7fc89e,#3da06a);border-color:#3da06a;">
         ⚙ Clarify (CCTV)
@@ -489,9 +492,12 @@
         Upload your own image…
         <input id="demo-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/avif">
       </label>
-      <span class="hint" style="margin-left:auto;font-size:12px;">
-        <b>Auto-Enhance</b> for general images · <b>Clarify</b> for CCTV / blurry / hazy stills.
-      </span>
+      <button class="btn small" id="demo-download" type="button" style="margin-left:auto;">⬇ Save output</button>
+    </div>
+    <div class="hint" style="font-size:12px;margin-top:6px;color:var(--dim);">
+      <b style="color:var(--accent);">Smart Auto</b>: one click — Lumen analyzes the input and picks
+      Auto-Enhance for normal photos, Clarify for blurry / hazy / CCTV stills.
+      Drop any image onto the input frame above.
     </div>
 
     <div id="demo-stats"></div>

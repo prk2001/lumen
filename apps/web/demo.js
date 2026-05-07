@@ -881,10 +881,10 @@
     refreshAll();
   }
 
-  function clarifyCctv() {
+  function clarifyCctv(forcedStrength) {
     if (!baseImageData) return;
     const sel = $('#demo-clarify-strength');
-    const strength = sel ? sel.value : 'standard';
+    const strength = forcedStrength || (sel ? sel.value : 'standard');
     chain = buildClarifyChain(strength);
     activeStep = 0;
     const panel = $('#demo-stats');
@@ -897,6 +897,74 @@
       `;
     }
     refreshAll();
+  }
+
+  // Smart Auto — analyze the input, decide whether it's "degraded enough"
+  // to need Clarify, or just needs general Auto-Enhance. Mirrors
+  // crates/lumen-cli/src/smart.rs's pick_strategy.
+  function pickSmartStrategy(stats) {
+    // Degraded markers:
+    //   - low edge density (likely blurry / low-detail)
+    //   - low contrast (p99-p01 small)
+    //   - low chroma (washed out / hazy)
+    let degraded_score = 0;
+    if (stats.edgeMean    < 0.06) degraded_score++;
+    if (stats.edgeMean    < 0.03) degraded_score++;
+    if ((stats.p99 - stats.p01) < 0.50) degraded_score++;
+    if ((stats.p99 - stats.p01) < 0.30) degraded_score++;
+    if (stats.chromaMean  < 0.10) degraded_score++;
+    if (stats.chromaMean  < 0.05) degraded_score++;
+    if (degraded_score >= 4) return { mode: 'clarify',  strength: 'aggressive' };
+    if (degraded_score >= 2) return { mode: 'clarify',  strength: 'standard'   };
+    return                          { mode: 'enhance',  strength: null         };
+  }
+
+  function smartAuto() {
+    if (!baseImageData) return;
+    const linBuf = imageDataToLinearF32(baseImageData);
+    const t0 = performance.now();
+    const stats = analyzeLinear(linBuf, baseW, baseH);
+    const dt = performance.now() - t0;
+    const decision = pickSmartStrategy(stats);
+
+    if (decision.mode === 'clarify') {
+      chain = buildClarifyChain(decision.strength);
+    } else {
+      chain = buildAutoChain(stats);
+    }
+    activeStep = 0;
+    const panel = $('#demo-stats');
+    if (panel) {
+      const fmt = (x, d=3) => Number.isFinite(x) ? x.toFixed(d) : '—';
+      panel.style.display = 'flex';
+      const verdict = decision.mode === 'clarify'
+        ? `degraded → clarify · ${decision.strength}`
+        : 'looks fine → auto-enhance';
+      panel.innerHTML = `
+        <span><b>verdict</b> ${verdict}</span>
+        <span><b>p01</b> ${fmt(stats.p01)}</span>
+        <span><b>p99</b> ${fmt(stats.p99)}</span>
+        <span><b>chroma̅</b> ${fmt(stats.chromaMean)}</span>
+        <span><b>edges̅</b> ${fmt(stats.edgeMean)}</span>
+        <span class="dim">decided in ${fmt(dt, 1)} ms</span>
+      `;
+    }
+    refreshAll();
+  }
+
+  function downloadOutput() {
+    if (!outputCanvas || baseW === 0) return;
+    outputCanvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lumen-output-${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }, 'image/png');
   }
 
   function showStats(stats, ms) {
@@ -976,8 +1044,10 @@
     $('#demo-copy')  && $('#demo-copy').addEventListener('click', copyRecipe);
     $('#demo-reset') && $('#demo-reset').addEventListener('click', reset);
     $('#demo-clear') && $('#demo-clear').addEventListener('click', clearChain);
-    $('#demo-auto')  && $('#demo-auto').addEventListener('click', autoEnhance);
-    $('#demo-clarify') && $('#demo-clarify').addEventListener('click', clarifyCctv);
+    $('#demo-auto')     && $('#demo-auto').addEventListener('click', autoEnhance);
+    $('#demo-clarify')  && $('#demo-clarify').addEventListener('click', () => clarifyCctv(null));
+    $('#demo-smart')    && $('#demo-smart').addEventListener('click', smartAuto);
+    $('#demo-download') && $('#demo-download').addEventListener('click', downloadOutput);
 
     const fileInput = $('#demo-file');
     if (fileInput) {

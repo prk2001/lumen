@@ -13,6 +13,7 @@
 mod auto;
 mod clarify;
 mod serve;
+mod smart;
 mod video_pipeline;
 
 use std::path::PathBuf;
@@ -183,6 +184,15 @@ enum Command {
         /// of running it.
         #[arg(long)] print_recipe: bool,
     },
+    /// Smart Auto — analyze the input and pick auto-enhance OR
+    /// clarify automatically. The one-button entry point.
+    Smart {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// 2x bicubic upscale at the end (clarify path only).
+        #[arg(long, default_value_t = false)] upscale: bool,
+        #[arg(long)] print_recipe: bool,
+    },
     /// Surveillance / forensic clarification preset — denoise + deblock
     /// + dehaze + CLAHE + laplacian deblur + sharpen + tone stretch.
     ///
@@ -255,7 +265,34 @@ fn run(cli: Cli) -> Result<()> {
         Command::Clarify { input, output, strength, upscale, print_recipe } => {
             cmd_clarify(&input, &output, &strength, upscale, print_recipe)
         }
+        Command::Smart { input, output, upscale, print_recipe } => {
+            cmd_smart(&input, &output, upscale, print_recipe)
+        }
     }
+}
+
+fn cmd_smart(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    upscale: bool,
+    print_recipe: bool,
+) -> Result<()> {
+    let (stats, strategy, recipe) = smart::build_smart_recipe(input, output, upscale)?;
+    if print_recipe {
+        println!("{}", serde_json::to_string_pretty(&recipe)?);
+        return Ok(());
+    }
+    eprintln!(
+        "stats: p01={:.3} p50={:.3} p99={:.3} chroma̅={:.3} edges̅={:.3}",
+        stats.p01, stats.p50, stats.p99, stats.chroma_mean, stats.edge_mean,
+    );
+    eprintln!("verdict: {} ({} steps)", strategy.label(), recipe.chain.len());
+    for s in &recipe.chain {
+        eprintln!("  {} {}", s.effect, s.params);
+    }
+    run_chain_in_memory(&recipe)?;
+    println!("wrote {}", output.display());
+    Ok(())
 }
 
 // ─── Auto-enhance + clarify dispatch ─────────────────────────────────────
