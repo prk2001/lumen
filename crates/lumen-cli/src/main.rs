@@ -19,6 +19,7 @@ mod operator;
 mod presets;
 mod project;
 mod report;
+mod sr;
 mod serve;
 mod smart;
 mod stack;
@@ -355,6 +356,32 @@ enum Command {
         /// Stacking mode: mean | median | max | min.
         #[arg(long, default_value = "mean")] mode: String,
     },
+    /// Multi-frame super-resolution with sub-pixel registration.
+    ///
+    /// Takes 2-30 frames of the same scene (e.g. 30 consecutive CCTV
+    /// grabs of a license plate), phase-correlates each against the
+    /// first to recover sub-pixel shifts, upsamples by `--scale`,
+    /// translates onto a common high-res grid, and fuses via
+    /// per-pixel median (robust to occlusions / JPEG artifacts).
+    /// Used by federal forensic labs to recover detail beyond the
+    /// sensor's nominal resolution. Prints a per-frame shift report
+    /// to stdout — record it in your audit log.
+    ///
+    /// References: Foroosh et al. IEEE TIP 2002 (sub-pixel phase
+    /// correlation); Fruchter & Hook PASP 2002 (Drizzle); Keren et
+    /// al. CVPR 1988 (sub-pixel image enhancement).
+    SuperResolve {
+        /// Two or more input image paths (uniform dimensions required).
+        /// Pass once per file: `--input a.png --input b.png --input c.png`,
+        /// or all at once: `--input a.png b.png c.png`.
+        #[arg(long = "input", value_name = "PATH", num_args = 1.., action = clap::ArgAction::Append)]
+        inputs: Vec<PathBuf>,
+        #[arg(long)] output: PathBuf,
+        /// Upscale factor (2..=8). Output is `scale` times wider+taller.
+        #[arg(long, default_value_t = 2)] scale: u32,
+        /// Fusion mode: `median` (robust, default) or `mean`.
+        #[arg(long, default_value = "median")] fuse: String,
+    },
     /// Apply a recipe to every image in a folder.
     ///
     /// Walks --input-dir for image files (png/jpg/tif/webp/bmp/raw),
@@ -513,6 +540,9 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Stack { inputs, output, mode } => {
             stack::cmd_stack(&inputs, &output, &mode)
+        }
+        Command::SuperResolve { inputs, output, scale, fuse } => {
+            sr::cmd_super_resolve(&inputs, &output, scale, &fuse)
         }
         Command::Operator { sub } => match sub {
             OperatorCommand::Init { name, agency, identifier, force } => {

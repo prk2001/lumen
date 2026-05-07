@@ -2159,6 +2159,7 @@ dependencies = [
  "lumen-qa",
  "lumen-report",
  "rayon",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2",
