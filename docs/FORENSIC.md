@@ -146,7 +146,26 @@ checks AND the chain is unbroken (every entry's
 If anyone tampered with any past entry, every entry from that point
 forward fails verification.
 
-### 5. Export a tamper-evident package
+### 5. Render a human-readable HTML report
+
+For reviewers who don't want to run the CLI:
+
+```bash
+lumen case report --dir ./case-2026-CCTV-LOTB
+```
+
+Writes `reports/case-report.html` — a single self-contained file
+that opens in any browser. Includes the case metadata, the full
+audit timeline (every signed entry, in order), and inline thumbnails
+of the original input, every stage frame, and the final output. The
+input/output JPEGs/PNGs are base64-embedded so the HTML survives
+detachment from the rest of the case folder.
+
+The HTML is a *presentation* layer; the audit log + `--strict` audit
+remain the cryptographic source of truth. To re-verify after reading
+the report, run `lumen case audit --strict --dir .` again.
+
+### 6. Export a tamper-evident package
 
 ```bash
 lumen case export \
@@ -185,15 +204,27 @@ The audit log signs:
   artifacts in the folder)
 - The prev_entry_signature_hex (chain integrity)
 
-Excluded: the artifact files themselves are referenced by hash but
-aren't physically embedded in the audit log — they live in
-`inputs/`, `outputs/`, etc. If any of those files are modified,
-their BLAKE3 stops matching the recorded hash and `lumen case audit`
-won't catch it (the audit log is only about the LOG; checking the
-artifacts is a separate `blake3sum`-style step).
+Excluded by default: the artifact files themselves are referenced by
+hash but aren't physically embedded in the audit log — they live in
+`inputs/`, `outputs/`, etc.
 
-> Roadmap: `lumen case audit --strict` to also re-hash every
-> referenced file and confirm the hashes still match.
+To catch post-hoc tampering of the artifact files (e.g. someone swapped
+`outputs/cleaned.png` after the fact), pass `--strict`:
+
+```bash
+lumen case audit --dir ./case-2026-CCTV-LOTB --strict
+```
+
+Strict mode runs the regular signature-chain audit, then walks the
+case folder and re-hashes every file under `inputs/`, `outputs/`,
+`stages/`, and `recipes/`. For each artifact reference in the audit
+log, it confirms a matching file is still present. The output adds:
+
+- `all_artifacts_match`: overall pass/fail
+- `artifacts[]`: per-reference rows showing `seq`, `kind`
+  (input/output/recipe), `claimed_hash`, and `matched_path`
+
+The command exits non-zero if any artifact is missing or modified.
 
 ## Crypto
 
@@ -223,8 +254,6 @@ environments by simply not running it.
 
 ## What's still on the roadmap
 
-- `lumen case audit --strict` — also re-hash every file referenced
-  by the audit log and check.
 - `lumen case sign-off --reviewer <key>` — separate reviewer
   signature gate for multi-operator approval.
 - C2PA-compatible export — the audit log is conceptually similar

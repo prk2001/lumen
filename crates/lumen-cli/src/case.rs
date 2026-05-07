@@ -279,6 +279,116 @@ pub fn verify_audit_log(case_dir: &Path) -> Result<Vec<AuditEntry>> {
     Ok(entries)
 }
 
+/// Per-artifact strict-audit result. Every entry that referenced a
+/// hash gets one row per hash; the row records the location searched
+/// and whether a matching file was found.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StrictArtifactCheck {
+    pub seq: u64,
+    pub kind: &'static str,    // "input" | "output" | "recipe"
+    pub claimed_hash: String,
+    pub matched_path: Option<String>,
+    pub ok: bool,
+}
+
+/// Strict audit result. The audit log signatures still must verify
+/// (delegated to `verify_audit_log`); on top of that, every artifact
+/// hash in the log must be backed by a real file in the case folder
+/// whose BLAKE3 still matches.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StrictAuditReport {
+    pub entries: Vec<AuditEntry>,
+    pub artifacts: Vec<StrictArtifactCheck>,
+    pub all_artifacts_match: bool,
+}
+
+/// `lumen case audit --strict`. Runs the regular signature-chain audit,
+/// then re-hashes every file referenced by any entry's
+/// `input_hash` / `output_hash` / `recipe_hash` and confirms the
+/// recorded BLAKE3 still matches a file in the case folder. Returns
+/// a per-artifact report so a reviewer can see exactly which file
+/// failed (if any).
+///
+/// An artifact is considered matched if:
+///   1. We can find a file in `inputs/`, `outputs/`, `outputs/stages/`,
+///      `stages/`, or `recipes/` whose BLAKE3 == the recorded hash, OR
+///   2. The recorded hash equals the hash of `inputs/<filename>` /
+///      `outputs/<filename>` / `recipes/<filename>` for any file in
+///      those subtrees (recursive).
+///
+/// Genesis-style "blake3:000…000" sentinels are ignored.
+pub fn verify_audit_log_strict(case_dir: &Path) -> Result<StrictAuditReport> {
+    let entries = verify_audit_log(case_dir)?; // chain still must hold
+    let mut all_files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for sub in ["inputs", "outputs", "stages", "recipes"] {
+        let dir = case_dir.join(sub);
+        if dir.is_dir() {
+            collect_files_recursive(&dir, &mut all_files)?;
+        }
+    }
+
+    let mut artifacts: Vec<StrictArtifactCheck> = Vec::new();
+    let mut all_ok = true;
+    for entry in &entries {
+        for (kind, claimed) in [
+            ("input", entry.input_hash.as_deref()),
+            ("output", entry.output_hash.as_deref()),
+            ("recipe", entry.recipe_hash.as_deref()),
+        ] {
+            let Some(claimed_hash) = claimed else { continue };
+            // Skip genesis sentinel.
+            if claimed_hash.contains("0000000000000000") {
+                continue;
+            }
+            let matched = all_files
+                .iter()
+                .find(|(h, _)| h == claimed_hash)
+                .map(|(_, p)| {
+                    p.strip_prefix(case_dir)
+                        .unwrap_or(p)
+                        .display()
+                        .to_string()
+                });
+            let ok = matched.is_some();
+            if !ok {
+                all_ok = false;
+            }
+            artifacts.push(StrictArtifactCheck {
+                seq: entry.seq,
+                kind,
+                claimed_hash: claimed_hash.to_string(),
+                matched_path: matched,
+                ok,
+            });
+        }
+    }
+
+    Ok(StrictAuditReport {
+        entries,
+        artifacts,
+        all_artifacts_match: all_ok,
+    })
+}
+
+fn collect_files_recursive(
+    dir: &Path,
+    acc: &mut Vec<(String, std::path::PathBuf)>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let p = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            collect_files_recursive(&p, acc)?;
+        } else if kind.is_file() {
+            // Cheap path: file is small enough that hashing is fine.
+            let h = blake3_hex_of_file(&p)?;
+            acc.push((h, p));
+        }
+    }
+    Ok(())
+}
+
 /// Canonical bytes used for signing. Stable across re-serializations
 /// because all object keys are sorted.
 fn canonical_signing_payload(entry: &AuditEntry) -> Vec<u8> {
@@ -371,16 +481,17 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Test-only mutex serializing every test in the crate that touches
+/// the `LUMEN_OPERATOR` env var. Lives outside the `tests` module so
+/// other modules' tests (e.g. `report::tests`) can share it.
+#[cfg(test)]
+pub(crate) static TEST_OPERATOR_SERIALIZER: std::sync::Mutex<()> =
+    std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// These tests share a global env var (`LUMEN_OPERATOR`). Without
-    /// serialization, parallel tests trample each other's operator
-    /// file. Hold this mutex for the duration of any test that calls
-    /// `with_test_operator`.
-    static SERIALIZER: Mutex<()> = Mutex::new(());
+    use TEST_OPERATOR_SERIALIZER as SERIALIZER;
 
     fn fresh_dir() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
@@ -441,6 +552,55 @@ mod tests {
             assert_eq!(verified[0].prev_entry_signature_hex, GENESIS);
             assert_eq!(verified[1].prev_entry_signature_hex, verified[0].entry_signature_hex);
             assert_eq!(verified[2].prev_entry_signature_hex, verified[1].entry_signature_hex);
+        });
+    }
+
+    #[test]
+    fn strict_audit_passes_when_artifacts_present() {
+        with_test_operator(|| {
+            let dir = fresh_dir();
+            // Stage a real input file so init can hash it.
+            let staged = dir.join("staged-input.png");
+            std::fs::write(&staged, b"fake png bytes for test").unwrap();
+            init(
+                &dir, "C-strict-1", "EVD-S1", "Strict OK Test", "Test PD",
+                Some(&staged),
+            )
+            .unwrap();
+            let report = verify_audit_log_strict(&dir).unwrap();
+            assert!(report.all_artifacts_match, "strict should pass; report: {:?}", report);
+            // Exactly one artifact ref (the case-init input hash).
+            assert_eq!(report.artifacts.len(), 1, "expected 1 artifact ref, got {}", report.artifacts.len());
+            assert!(report.artifacts[0].ok);
+            assert_eq!(report.artifacts[0].kind, "input");
+        });
+    }
+
+    #[test]
+    fn strict_audit_fails_when_artifact_modified() {
+        with_test_operator(|| {
+            let dir = fresh_dir();
+            let staged = dir.join("staged-input.png");
+            std::fs::write(&staged, b"original bytes").unwrap();
+            init(
+                &dir, "C-strict-2", "EVD-S2", "Strict Tamper Test",
+                "Test PD", Some(&staged),
+            )
+            .unwrap();
+            // Regular audit still passes (log signatures are intact).
+            assert!(verify_audit_log(&dir).is_ok());
+            // Modify the copy under inputs/ — no entry in audit.jsonl
+            // catches this without `--strict`.
+            let copied = dir.join("inputs").join("staged-input.png");
+            assert!(copied.exists());
+            std::fs::write(&copied, b"TAMPERED bytes").unwrap();
+            let report = verify_audit_log_strict(&dir).unwrap();
+            assert!(
+                !report.all_artifacts_match,
+                "strict audit should detect post-hoc artifact tampering"
+            );
+            assert!(!report.artifacts[0].ok);
+            assert_eq!(report.artifacts[0].matched_path, None);
         });
     }
 

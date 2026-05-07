@@ -18,6 +18,7 @@ mod colorize;
 mod operator;
 mod presets;
 mod project;
+mod report;
 mod serve;
 mod smart;
 mod stack;
@@ -96,13 +97,30 @@ enum CaseCommand {
         #[arg(long)] note: String,
     },
     /// Verify the audit log: every signature valid, chain unbroken.
+    /// With `--strict`, also re-hash every artifact referenced by any
+    /// audit entry and confirm a matching file still exists in the
+    /// case folder. This catches post-hoc tampering of `inputs/`,
+    /// `outputs/`, `recipes/`, or `stages/` files that the regular
+    /// audit doesn't cover.
     Audit {
         #[arg(long)] dir: PathBuf,
+        /// Re-hash every referenced artifact and verify it still
+        /// matches the hash recorded in the audit log.
+        #[arg(long, default_value_t = false)] strict: bool,
     },
     /// Export the case folder as a tamper-evident zip.
     Export {
         #[arg(long)] dir: PathBuf,
         #[arg(long)] output: PathBuf,
+    },
+    /// Render a self-contained HTML report into `reports/` showing the
+    /// case metadata, full audit timeline, and embedded thumbnails of
+    /// the original input, final output, and stage frames. Useful for
+    /// reviewer inspection without running the CLI.
+    Report {
+        #[arg(long)] dir: PathBuf,
+        /// Output filename (relative to `reports/`). Default: case-report.html
+        #[arg(long, default_value = "case-report.html")] output: String,
     },
 }
 
@@ -447,8 +465,9 @@ fn run(cli: Cli) -> Result<()> {
                 cmd_case_render(&dir, &recipe, &input, &output, &note)
             }
             CaseCommand::Note { dir, note } => cmd_case_note(&dir, &note),
-            CaseCommand::Audit { dir } => cmd_case_audit(&dir),
+            CaseCommand::Audit { dir, strict } => cmd_case_audit(&dir, strict),
             CaseCommand::Export { dir, output } => cmd_case_export(&dir, &output),
+            CaseCommand::Report { dir, output } => cmd_case_report(&dir, &output),
         },
         Command::Project { sub } => match sub {
             ProjectCommand::Show { path } => project::cmd_project_show(&path),
@@ -577,15 +596,54 @@ fn cmd_case_note(dir: &std::path::Path, note: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_case_audit(dir: &std::path::Path) -> Result<()> {
-    let entries = case::verify_audit_log(dir)?;
+fn cmd_case_audit(dir: &std::path::Path, strict: bool) -> Result<()> {
     let m = case::load_metadata(dir)?;
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-        "case": m,
-        "audit_chain_verified": true,
-        "entry_count": entries.len(),
-        "entries": entries,
-    }))?);
+    if strict {
+        let report = case::verify_audit_log_strict(dir)?;
+        let any_missing = report.artifacts.iter().any(|a| !a.ok);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "case": m,
+                "audit_chain_verified": true,
+                "all_artifacts_match": report.all_artifacts_match,
+                "entry_count": report.entries.len(),
+                "artifact_count": report.artifacts.len(),
+                "artifacts": report.artifacts,
+                "entries": report.entries,
+            }))?
+        );
+        if any_missing {
+            return Err(anyhow!(
+                "strict audit failed: one or more referenced artifacts \
+                 do not match their recorded BLAKE3 (see `artifacts` array)"
+            ));
+        }
+    } else {
+        let entries = case::verify_audit_log(dir)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "case": m,
+                "audit_chain_verified": true,
+                "entry_count": entries.len(),
+                "entries": entries,
+            }))?
+        );
+    }
+    Ok(())
+}
+
+fn cmd_case_report(dir: &std::path::Path, output_filename: &str) -> Result<()> {
+    let out = report::render_html_report(dir, output_filename)?;
+    let size = std::fs::metadata(&out)?.len();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "report_path": out.display().to_string(),
+            "size_bytes": size,
+        }))?
+    );
     Ok(())
 }
 
