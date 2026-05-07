@@ -188,6 +188,142 @@
     return buf;
   }
 
+  // ---------------------------------------------------------------
+  // FFT-based Wiener deconvolution (mirrors lumen-fx-deblur.wiener)
+  // ---------------------------------------------------------------
+  // Pure-JS radix-2 Cooley-Tukey FFT. The CLI uses rustfft; this is a
+  // direct port so the in-browser preview matches the Rust path.
+  // Throws on non-power-of-2 lengths.
+  function fft1d(re, im, inverse) {
+    const n = re.length;
+    // bit-reversal permutation
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    // Cooley-Tukey
+    for (let len = 2; len <= n; len <<= 1) {
+      const half = len >> 1;
+      const ang = (inverse ? 2 : -2) * Math.PI / len;
+      const wRe = Math.cos(ang), wIm = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let curRe = 1, curIm = 0;
+        for (let k = 0; k < half; k++) {
+          const xRe = re[i + k], xIm = im[i + k];
+          const yRe = re[i + k + half] * curRe - im[i + k + half] * curIm;
+          const yIm = re[i + k + half] * curIm + im[i + k + half] * curRe;
+          re[i + k]        = xRe + yRe;
+          im[i + k]        = xIm + yIm;
+          re[i + k + half] = xRe - yRe;
+          im[i + k + half] = xIm - yIm;
+          const nRe = curRe * wRe - curIm * wIm;
+          const nIm = curRe * wIm + curIm * wRe;
+          curRe = nRe; curIm = nIm;
+        }
+      }
+    }
+    if (inverse) {
+      for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+    }
+  }
+  // 2D FFT in place. Width/height must be powers of 2.
+  function fft2d(re, im, w, h, inverse) {
+    const rowR = new Float64Array(w), rowI = new Float64Array(w);
+    for (let y = 0; y < h; y++) {
+      const off = y * w;
+      for (let x = 0; x < w; x++) { rowR[x] = re[off + x]; rowI[x] = im[off + x]; }
+      fft1d(rowR, rowI, inverse);
+      for (let x = 0; x < w; x++) { re[off + x] = rowR[x]; im[off + x] = rowI[x]; }
+    }
+    const colR = new Float64Array(h), colI = new Float64Array(h);
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) { colR[y] = re[y * w + x]; colI[y] = im[y * w + x]; }
+      fft1d(colR, colI, inverse);
+      for (let y = 0; y < h; y++) { re[y * w + x] = colR[y]; im[y * w + x] = colI[y]; }
+    }
+  }
+  function nextPow2(n) { let p = 1; while (p < n) p <<= 1; return p; }
+  // Build a Gaussian PSF, fft-shifted so the origin is at (0,0) of the
+  // padded grid (and wraps to the four corners). Sums to 1.
+  function gaussianPsfPadded(sigma, fw, fh) {
+    const re = new Float64Array(fw * fh);
+    const im = new Float64Array(fw * fh);
+    if (sigma <= 0) { re[0] = 1; return { re, im }; }
+    const inv2s2 = 1 / (2 * sigma * sigma);
+    // Choose kernel radius covering 4 sigma; clamp to fft half-size.
+    const r = Math.min(Math.floor(4 * sigma), Math.min(fw, fh) >> 1);
+    let sum = 0;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        const v = Math.exp(-(dx * dx + dy * dy) * inv2s2);
+        const x = ((dx % fw) + fw) % fw;
+        const y = ((dy % fh) + fh) % fh;
+        re[y * fw + x] = v;
+        sum += v;
+      }
+    }
+    if (sum > 0) for (let i = 0; i < re.length; i++) re[i] /= sum;
+    return { re, im };
+  }
+  // Wiener deconvolution. Recovers detail when the assumed PSF matches
+  // the actual blur; small nsr = sharper but more ringing on hard edges.
+  // Pixel budget: skip silently for very large images so the demo stays
+  // responsive (the CLI handles arbitrary sizes via rustfft).
+  function fxWienerFft(buf, w, h, p) {
+    const sigma = Math.max(0.1, +p.sigma);
+    const nsr = Math.max(0, +p.nsr);
+    if (sigma <= 0) return buf;
+    const fw = nextPow2(w), fh = nextPow2(h);
+    if (fw * fh > 1024 * 1024) {
+      // Bail out for >1M FFT-pixel images. Demo only — don't lock the
+      // tab. The CLI runs `lumen-fx-deblur.wiener` for real sizes.
+      console.warn('[lumen demo] image too large for in-browser Wiener; '
+        + 'falling back to Laplacian sharpen (CLI runs the real Wiener).');
+      return fxLaplacian(buf, w, h, { amount: 0.6, sigma: sigma, sigma_ratio: 1.6 });
+    }
+    const psf = gaussianPsfPadded(sigma, fw, fh);
+    fft2d(psf.re, psf.im, fw, fh, false);
+    // Process each color channel separately.
+    const ch = [0, 1, 2];
+    for (const c of ch) {
+      const imRe = new Float64Array(fw * fh);
+      const imIm = new Float64Array(fw * fh);
+      // Pad (zero) into fw×fh.
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          imRe[y * fw + x] = buf[(y * w + x) * 4 + c];
+        }
+      }
+      fft2d(imRe, imIm, fw, fh, false);
+      // Wiener: F * H* / (|H|^2 + nsr)
+      for (let i = 0; i < fw * fh; i++) {
+        const hr = psf.re[i], hi = psf.im[i];
+        const denom = hr * hr + hi * hi + nsr;
+        if (denom <= 0) continue;
+        // Multiply F by conj(H): (a+bi)(c-di) = (ac+bd) + (bc-ad)i
+        const fr = imRe[i], fi = imIm[i];
+        const numRe = fr * hr + fi * hi;
+        const numIm = fi * hr - fr * hi;
+        imRe[i] = numRe / denom;
+        imIm[i] = numIm / denom;
+      }
+      fft2d(imRe, imIm, fw, fh, true);
+      // Crop back + clamp.
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const v = imRe[y * fw + x];
+          buf[(y * w + x) * 4 + c] = Math.max(0, Math.min(1, v));
+        }
+      }
+    }
+    return buf;
+  }
+
   // deblock — 1-D Gaussian along JPEG-style block boundaries only.
   // Mirrors lumen-fx-compression.deblock.
   function fxDeblock(buf, w, h, p) {
@@ -544,6 +680,16 @@
       ],
     },
     {
+      id: 'lumen-fx-deblur.wiener',
+      label: 'Wiener Deblur (FFT)',
+      apply: fxWienerFft,
+      params: [
+        { id: 'sigma',      label: 'PSF sigma', kind: 'float', min: 0.3, max: 4,   step: 0.05, default: 1.4 },
+        { id: 'nsr',        label: 'NSR',       kind: 'float', min: 0,   max: 0.2, step: 0.001, default: 0.025 },
+        { id: 'iterations', label: 'Iterations',kind: 'float', min: 1,   max: 4,   step: 1,    default: 1 },
+      ],
+    },
+    {
       id: 'lumen-fx-color.duotone',
       label: 'Duotone (luma colorize)',
       apply: fxDuotone,
@@ -586,24 +732,25 @@
     },
     plate: {
       // Plate / text readability — small CLAHE tiles + 3-pass unsharp
-      // at decreasing amount + final 2x bicubic upscale. Conservative
-      // dehaze (the noise floor matters more for OCR-style reading).
+      // at decreasing amount. Now includes browser-side Wiener (FFT)
+      // so the demo matches the CLI's plate strength.
       nr_sigma: 1.0, deblock_strength: 0.7, dehaze_omega: 0.70,
       clahe_clip: 1.8, clahe_tiles: 16, cleanup_sigma: 0.6,
-      laplacian_amount: 0.4, unsharp_amount: 0.6, unsharp_passes: 3,
-      bc_contrast: 1.12, upscale: true,
+      laplacian_amount: 0.0, unsharp_amount: 0.55, unsharp_passes: 3,
+      bc_contrast: 1.12, upscale: false,
+      wiener_sigma: 1.5, wiener_nsr: 0.02,
     },
     forensic: {
-      // Forensic / police-grade preview — same kernels as plate but
-      // with conservative dehaze + extra-careful cleanup. The browser
-      // demo can't run Wiener / Richardson-Lucy (no FFT shipped to JS)
-      // so the in-page preview shows what the spatial chain alone gets
-      // you. The CLI runs the full chain (lumen clarify --strength
-      // forensic --upscale) for the actual military/police-grade output.
+      // Forensic / police-grade preview — bilateral effect not in JS,
+      // so the demo uses Gaussian (CLI uses bilateral). With
+      // browser-side Wiener now, the spatial+spectral chain matches
+      // most of the CLI's output. RL still CLI-only (FFT-iterative
+      // is too slow for in-tab demo).
       nr_sigma: 0.8, deblock_strength: 0.7, dehaze_omega: 0.72,
       clahe_clip: 1.6, clahe_tiles: 16, cleanup_sigma: 0.5,
       laplacian_amount: 0.0, unsharp_amount: 0.45, unsharp_passes: 3,
       bc_contrast: 1.10, upscale: false,
+      wiener_sigma: 1.4, wiener_nsr: 0.025,
     },
   };
 
@@ -625,6 +772,14 @@
       chain.push({
         effect: 'lumen-fx-deblur.laplacian',
         params: { amount: p.laplacian_amount, sigma: 0.9, sigma_ratio: 1.6 },
+      });
+    }
+    // Wiener deconvolution (browser FFT, mirrors lumen-fx-deblur.wiener).
+    // Real inverse filtering — recovers detail that was actually there.
+    if (p.wiener_sigma > 0) {
+      chain.push({
+        effect: 'lumen-fx-deblur.wiener',
+        params: { sigma: p.wiener_sigma, nsr: p.wiener_nsr, iterations: 1 },
       });
     }
     // Iterated unsharp — decreasing amount each pass.
