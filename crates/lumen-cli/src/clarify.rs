@@ -40,6 +40,17 @@ struct Params {
     /// Second-pass Gaussian denoise sigma applied AFTER dehaze + CLAHE
     /// to kill amplified noise. The single biggest fidelity safeguard.
     cleanup_sigma: f64,
+    /// Wiener-deconvolution PSF sigma. 0.0 disables the step. Wiener
+    /// is real inverse-filtering, not edge-enhancement: when the PSF
+    /// matches the actual blur, it recovers detail. Set this for the
+    /// plate / text-readability path.
+    wiener_psf_sigma: f64,
+    /// Wiener noise-to-signal ratio (regularization). Higher = less
+    /// ringing but less detail recovery.
+    wiener_nsr: f64,
+    /// Number of unsharp passes. 1 = single pass; 2-3 = iterative
+    /// sharpening with decreasing amount each pass.
+    unsharp_passes: i64,
 }
 
 /// Tuned for fidelity: dehaze strengths capped, with a second denoise
@@ -60,17 +71,43 @@ fn params_for(strength: &str) -> Params {
             unsharp_amount: 0.35,
             bc_contrast: 1.04,
             cleanup_sigma: 0.35,
+            wiener_psf_sigma: 0.0,
+            wiener_nsr: 0.05,
+            unsharp_passes: 1,
         },
         "aggressive" => Params {
             nr_sigma: 0.9,
             deblock_strength: 0.6,
-            dehaze_omega: 0.80,      // was 0.95 — over-amplified noise
-            clahe_clip: 2.5,         // was 4.0
+            dehaze_omega: 0.80,
+            clahe_clip: 2.5,
             clahe_tiles: 10,
-            laplacian_amount: 0.4,   // was 1.4 — keep mild
-            unsharp_amount: 0.7,     // was 1.3
-            bc_contrast: 1.10,       // was 1.20
+            laplacian_amount: 0.4,
+            unsharp_amount: 0.7,
+            bc_contrast: 1.10,
             cleanup_sigma: 0.55,
+            wiener_psf_sigma: 1.1,   // assume mild Gaussian blur
+            wiener_nsr: 0.012,
+            unsharp_passes: 2,
+        },
+        // "plate" / "extreme" — tuned for text + license-plate readability.
+        // Wiener inverts the assumed PSF (real deblur), small CLAHE
+        // tiles (4x4) maximize per-character contrast, three sharpen
+        // passes with decreasing amount stack edge-recovery without
+        // amplifying flat-region noise (threshold > 0). Bigger upscale
+        // gives more pixels to the OCR-style reader's eye.
+        "plate" | "extreme" => Params {
+            nr_sigma: 1.1,           // strong pre-clean — Wiener amplifies any leftover noise
+            deblock_strength: 0.7,
+            dehaze_omega: 0.75,      // not too aggressive — Wiener handles the deblur
+            clahe_clip: 1.8,
+            clahe_tiles: 16,         // small tiles maximize per-character contrast
+            laplacian_amount: 0.0,   // skip Laplacian — Wiener is the real deblur
+            unsharp_amount: 0.55,
+            bc_contrast: 1.12,
+            cleanup_sigma: 0.6,
+            wiener_psf_sigma: 1.5,   // assume moderate Gaussian blur in the source
+            wiener_nsr: 0.02,        // a bit more regularization than aggressive
+            unsharp_passes: 3,       // three iterations of decreasing-amount sharpen
         },
         _ => Params {
             // "standard"
@@ -83,6 +120,9 @@ fn params_for(strength: &str) -> Params {
             unsharp_amount: 0.5,
             bc_contrast: 1.06,
             cleanup_sigma: 0.45,
+            wiener_psf_sigma: 0.0,
+            wiener_nsr: 0.05,
+            unsharp_passes: 1,
         },
     }
 }
@@ -138,12 +178,28 @@ pub fn build_clarify_recipe(
         },
     ];
 
-    // 6. Optional Laplacian deblur — off by default in fidelity mode.
-    //    Stacking laplacian + unsharp on a low-info input hallucinates structure.
+    // 6. Wiener deconvolution — real inverse filtering for the assumed
+    //    PSF. Recovers detail that was actually there in the original;
+    //    unlike Laplacian/unsharp it doesn't fabricate edges. Only run
+    //    when the strength tier opts in (sigma > 0).
+    if p.wiener_psf_sigma > 0.0 {
+        chain.push(RecipeStep {
+            effect: "lumen-fx-deblur.wiener".into(),
+            label: Some("clarify wiener".into()),
+            params: json!({
+                "sigma": p.wiener_psf_sigma,
+                "nsr": p.wiener_nsr,
+                "iterations": 1,
+            }),
+        });
+    }
+
+    // 7. Optional Laplacian deblur — additional edge enhancement on top
+    //    of Wiener. Off by default in fidelity mode.
     if p.laplacian_amount > 0.0 {
         chain.push(RecipeStep {
             effect: "lumen-fx-deblur.laplacian".into(),
-            label: Some("clarify deblur".into()),
+            label: Some("clarify laplacian".into()),
             params: json!({
                 "amount": p.laplacian_amount,
                 "sigma": 0.9,
@@ -152,17 +208,27 @@ pub fn build_clarify_recipe(
         });
     }
 
-    // 7. Final unsharp — restore edge crispness. Threshold > 0 protects
+    // 8. Iterative unsharp — multiple passes with decreasing amount.
+    //    Each pass operates on the result of the prior pass, recovering
+    //    detail at successively finer scales. Threshold > 0 protects
     //    flat regions from getting their texture amplified.
-    chain.push(RecipeStep {
-        effect: "lumen-fx-sharpen.unsharp_mask".into(),
-        label: Some("clarify sharpen".into()),
-        params: json!({
-            "amount": p.unsharp_amount,
-            "radius": 1.0,
-            "threshold": 0.015,
-        }),
-    });
+    let passes = p.unsharp_passes.max(1) as usize;
+    for k in 0..passes {
+        let amt = p.unsharp_amount * (1.0 - 0.30 * k as f64);
+        chain.push(RecipeStep {
+            effect: "lumen-fx-sharpen.unsharp_mask".into(),
+            label: Some(if passes == 1 {
+                "clarify sharpen".into()
+            } else {
+                format!("clarify sharpen pass {}", k + 1)
+            }),
+            params: json!({
+                "amount": amt.max(0.05),
+                "radius": 1.0,
+                "threshold": 0.015,
+            }),
+        });
+    }
 
     // 8. Mild tone stretch.
     chain.push(RecipeStep {
@@ -172,10 +238,21 @@ pub fn build_clarify_recipe(
     });
 
     if upscale {
+        // Plate strength upscales 2x with Lanczos (sharper) instead of
+        // Mitchell — better for getting more pixels per character.
+        let (eff, scale) = if matches!(strength, "plate" | "extreme") {
+            ("lumen-fx-upscale.lanczos", 2.0)
+        } else {
+            ("lumen-fx-upscale.bicubic", 2.0)
+        };
         chain.push(RecipeStep {
-            effect: "lumen-fx-upscale.bicubic".into(),
+            effect: eff.into(),
             label: Some("clarify upscale".into()),
-            params: json!({ "scale": 2.0 }),
+            params: if eff.ends_with("lanczos") {
+                json!({ "scale": scale, "lobes": 3 })
+            } else {
+                json!({ "scale": scale })
+            },
         });
     }
     Ok(Recipe {
@@ -212,9 +289,10 @@ mod tests {
 
     #[test]
     fn aggressive_no_upscale_chain_size_is_bounded() {
-        // After fidelity retuning, the aggressive chain (with laplacian
-        // re-enabled) is at most: denoise + deblock + dehaze + CLAHE +
-        // denoise + laplacian + unsharp + tone = 8 steps.
+        // Aggressive chain after readability tuning includes:
+        //   pre-denoise + deblock + dehaze + CLAHE + post-denoise +
+        //   wiener + laplacian + 2x unsharp + tone = 10 steps.
+        // Plate adds a third unsharp pass + Lanczos upscale.
         let r = build_clarify_recipe(
             std::path::Path::new("/tmp/in.png"),
             std::path::Path::new("/tmp/out.png"),
@@ -222,7 +300,31 @@ mod tests {
             false,
         )
         .unwrap();
-        assert!(r.chain.len() <= 8);
+        assert!(r.chain.len() <= 11, "got {} steps", r.chain.len());
+    }
+
+    #[test]
+    fn plate_strength_uses_wiener_and_iterated_sharpen() {
+        let r = build_clarify_recipe(
+            std::path::Path::new("/tmp/in.png"),
+            std::path::Path::new("/tmp/out.png"),
+            "plate",
+            false,
+        )
+        .unwrap();
+        // Plate must include Wiener (real deblur).
+        assert!(
+            r.chain.iter().any(|s| s.effect == "lumen-fx-deblur.wiener"),
+            "plate strength missing Wiener; got: {:?}",
+            r.chain.iter().map(|s| &s.effect).collect::<Vec<_>>()
+        );
+        // And three unsharp passes (decreasing amount).
+        let passes = r
+            .chain
+            .iter()
+            .filter(|s| s.effect == "lumen-fx-sharpen.unsharp_mask")
+            .count();
+        assert_eq!(passes, 3, "plate should have 3 unsharp passes");
     }
 
     #[test]

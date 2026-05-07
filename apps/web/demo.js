@@ -560,35 +560,79 @@
   ];
 
   // Strength tiers for "Clarify (CCTV)" — mirrors clarify.rs in lumen-cli.
+  // The fidelity-tuned parameters match the Rust side; aggressive/plate
+  // include a post-dehaze cleanup denoise to fight noise amplification.
+  // Plate strength uses iterated unsharp (3 passes with decreasing
+  // amount) to push readability without hallucination — the Rust side
+  // adds Wiener deconvolution which we don't have an FFT for in JS yet.
   const CLARIFY_PRESETS = {
     light: {
-      nr_sigma: 0.6, deblock_strength: 0.3, dehaze_omega: 0.6,
-      clahe_clip: 1.5, clahe_tiles: 8, laplacian_amount: 0.5,
-      unsharp_amount: 0.5, bc_contrast: 1.05,
+      nr_sigma: 0.5, deblock_strength: 0.25, dehaze_omega: 0.55,
+      clahe_clip: 1.2, clahe_tiles: 8, cleanup_sigma: 0.35,
+      laplacian_amount: 0.0, unsharp_amount: 0.35, unsharp_passes: 1,
+      bc_contrast: 1.04, upscale: false,
     },
     standard: {
-      nr_sigma: 0.9, deblock_strength: 0.6, dehaze_omega: 0.8,
-      clahe_clip: 2.5, clahe_tiles: 8, laplacian_amount: 0.9,
-      unsharp_amount: 0.8, bc_contrast: 1.10,
+      nr_sigma: 0.7, deblock_strength: 0.45, dehaze_omega: 0.65,
+      clahe_clip: 1.8, clahe_tiles: 8, cleanup_sigma: 0.45,
+      laplacian_amount: 0.0, unsharp_amount: 0.5, unsharp_passes: 1,
+      bc_contrast: 1.06, upscale: false,
     },
     aggressive: {
-      nr_sigma: 1.4, deblock_strength: 0.9, dehaze_omega: 0.95,
-      clahe_clip: 4.0, clahe_tiles: 12, laplacian_amount: 1.4,
-      unsharp_amount: 1.3, bc_contrast: 1.20,
+      nr_sigma: 0.9, deblock_strength: 0.6, dehaze_omega: 0.80,
+      clahe_clip: 2.5, clahe_tiles: 10, cleanup_sigma: 0.55,
+      laplacian_amount: 0.4, unsharp_amount: 0.7, unsharp_passes: 2,
+      bc_contrast: 1.10, upscale: false,
+    },
+    plate: {
+      // Plate / text readability — small CLAHE tiles + 3-pass unsharp
+      // at decreasing amount + final 2x bicubic upscale. Conservative
+      // dehaze (the noise floor matters more for OCR-style reading).
+      nr_sigma: 1.0, deblock_strength: 0.7, dehaze_omega: 0.70,
+      clahe_clip: 1.8, clahe_tiles: 16, cleanup_sigma: 0.6,
+      laplacian_amount: 0.4, unsharp_amount: 0.6, unsharp_passes: 3,
+      bc_contrast: 1.12, upscale: true,
     },
   };
 
   function buildClarifyChain(strength) {
     const p = CLARIFY_PRESETS[strength] || CLARIFY_PRESETS.standard;
-    return [
-      { effect: 'lumen-fx-denoise.gaussian',         params: { sigma: p.nr_sigma } },
-      { effect: 'lumen-fx-compression.deblock',      params: { block_size: 8, strength: p.deblock_strength } },
-      { effect: 'lumen-fx-weather.dehaze_dcp',       params: { omega: p.dehaze_omega, t0: 0.1, patch_radius: 5 } },
-      { effect: 'lumen-fx-text.clahe',               params: { tiles_x: p.clahe_tiles, tiles_y: p.clahe_tiles, clip_limit: p.clahe_clip } },
-      { effect: 'lumen-fx-deblur.laplacian',         params: { amount: p.laplacian_amount, sigma: 0.8, sigma_ratio: 1.6 } },
-      { effect: 'lumen-fx-sharpen.unsharp_mask',     params: { amount: p.unsharp_amount, radius: 1.0, threshold: 0.0 } },
-      { effect: 'lumen-fx-exposure.brightness_contrast', params: { brightness: 0.0, contrast: p.bc_contrast } },
+    const chain = [
+      { effect: 'lumen-fx-denoise.gaussian',
+        params: { sigma: p.nr_sigma } },
+      { effect: 'lumen-fx-compression.deblock',
+        params: { block_size: 8, strength: p.deblock_strength } },
+      { effect: 'lumen-fx-weather.dehaze_dcp',
+        params: { omega: p.dehaze_omega, t0: 0.15, patch_radius: 5 } },
+      { effect: 'lumen-fx-text.clahe',
+        params: { tiles_x: p.clahe_tiles, tiles_y: p.clahe_tiles, clip_limit: p.clahe_clip } },
+      { effect: 'lumen-fx-denoise.gaussian',
+        params: { sigma: p.cleanup_sigma } },
     ];
+    if (p.laplacian_amount > 0) {
+      chain.push({
+        effect: 'lumen-fx-deblur.laplacian',
+        params: { amount: p.laplacian_amount, sigma: 0.9, sigma_ratio: 1.6 },
+      });
+    }
+    // Iterated unsharp — decreasing amount each pass.
+    const passes = Math.max(1, p.unsharp_passes | 0);
+    for (let k = 0; k < passes; k++) {
+      const amt = Math.max(0.05, p.unsharp_amount * (1.0 - 0.30 * k));
+      chain.push({
+        effect: 'lumen-fx-sharpen.unsharp_mask',
+        params: { amount: amt, radius: 1.0, threshold: 0.015 },
+      });
+    }
+    chain.push({
+      effect: 'lumen-fx-exposure.brightness_contrast',
+      params: { brightness: 0.0, contrast: p.bc_contrast },
+    });
+    // Note: in-browser bicubic upscale would change the canvas size,
+    // which complicates the A/B compare. CLI's `lumen clarify --upscale`
+    // does it for real; in the demo we keep dims stable so the slider
+    // works.
+    return chain;
   }
 
   // Stylistic presets — each is a chain of existing effects.
@@ -719,6 +763,156 @@
       luminanceMean: (rSum + gSum + bSum) / (3 * n),
     };
   }
+
+  // ─── Image inspector ────────────────────────────────────────────────
+  // Given an analyzer Stats result, derive a human-readable diagnosis
+  // (low contrast / hazy / blurry / noisy / color cast / etc.) and a
+  // recommended Lumen preset. Designed to give the user ALL the
+  // observable facts about their image before they touch anything.
+  function diagnoseFromStats(stats, baseImageData, fileBytes) {
+    const out = {
+      facts:           [],
+      problems:        [],
+      recommendation:  null,
+      recommendationLabel: null,
+    };
+    const range = stats.p99 - stats.p01;
+    const fmt = (x, d=3) => Number.isFinite(x) ? x.toFixed(d) : '—';
+    out.facts.push(['Dimensions',     `${baseW} × ${baseH} px (${(baseW*baseH).toLocaleString()} pixels)`]);
+    if (fileBytes != null) {
+      out.facts.push(['File size',     formatBytes(fileBytes)]);
+      out.facts.push(['Bits/pixel',    `${(fileBytes * 8 / (baseW * baseH)).toFixed(2)}`]);
+    }
+    out.facts.push(['Mean luma',       fmt(stats.luminanceMean)]);
+    out.facts.push(['Dynamic range',   `${fmt(stats.p01)} … ${fmt(stats.p99)}  (Δ ${fmt(range)})`]);
+    out.facts.push(['Mid (p50)',       fmt(stats.p50)]);
+    out.facts.push(['Mean chroma',     fmt(stats.chromaMean)]);
+    out.facts.push(['Edge density',    fmt(stats.edgeMean)]);
+
+    // Color cast estimate: how far per-channel means are from a neutral
+    // gray defined by overall luma. Strong ratio → tinted image.
+    const r = stats.rMean ?? 0, g = stats.gMean ?? 0, b = stats.bMean ?? 0;
+    const totalMean = (r + g + b) / 3;
+    const dr = r - totalMean, dg = g - totalMean, db = b - totalMean;
+    const castMag = Math.sqrt(dr*dr + dg*dg + db*db);
+    const castDir = describeCast(dr, dg, db);
+    out.facts.push(['Color cast',      `${castDir} (Δ${fmt(castMag, 3)})`]);
+
+    // Diagnose problems
+    if (range < 0.30) out.problems.push(['Low dynamic range', `p99 − p01 = ${fmt(range, 3)}; image is washed out or hazy.`]);
+    else if (range < 0.50) out.problems.push(['Compressed range', `p99 − p01 = ${fmt(range, 3)}; some haze or low contrast.`]);
+    if (stats.p99 < 0.85)  out.problems.push(['Highlights underexposed', `p99 = ${fmt(stats.p99, 3)}; image lacks bright detail.`]);
+    if (stats.p01 > 0.10)  out.problems.push(['Shadows lifted',          `p01 = ${fmt(stats.p01, 3)}; black point isn’t at zero (haze, fog, or fill light).`]);
+    if (stats.p50 < 0.30)  out.problems.push(['Midtones dark',           `p50 = ${fmt(stats.p50, 3)}; consider a gamma boost.`]);
+    if (stats.p50 > 0.70)  out.problems.push(['Midtones bright',         `p50 = ${fmt(stats.p50, 3)}; consider a gamma cut.`]);
+    if (stats.chromaMean < 0.05) out.problems.push(['Near-monochrome', `chroma̅ = ${fmt(stats.chromaMean, 3)}; nearly grayscale (or B&W input).`]);
+    else if (stats.chromaMean < 0.10) out.problems.push(['Low chroma', `chroma̅ = ${fmt(stats.chromaMean, 3)}; muted colors.`]);
+    if (stats.edgeMean < 0.03) out.problems.push(['Very blurry / soft', `edges̅ = ${fmt(stats.edgeMean, 3)}; little high-frequency detail.`]);
+    else if (stats.edgeMean < 0.06) out.problems.push(['Some softness', `edges̅ = ${fmt(stats.edgeMean, 3)}; mild blur or low resolution.`]);
+    if (castMag > 0.06) out.problems.push(['Color cast detected', `dominant tint: ${castDir}; consider color balance.`]);
+
+    // Recommend preset based on problem fingerprint.
+    // Score how "degraded" the image looks and pick:
+    let degradedScore = 0;
+    if (stats.edgeMean    < 0.06) degradedScore++;
+    if (stats.edgeMean    < 0.03) degradedScore++;
+    if (range             < 0.50) degradedScore++;
+    if (range             < 0.30) degradedScore++;
+    if (stats.chromaMean  < 0.10) degradedScore++;
+    if (stats.chromaMean  < 0.05) degradedScore++;
+
+    if (degradedScore >= 4) {
+      out.recommendation = { mode: 'clarify', strength: 'aggressive' };
+      out.recommendationLabel = 'Clarify (aggressive) — image is heavily degraded';
+    } else if (degradedScore >= 2) {
+      out.recommendation = { mode: 'clarify', strength: 'standard' };
+      out.recommendationLabel = 'Clarify (standard) — moderate haze / low contrast';
+    } else if (range < 0.85 || Math.abs(stats.p50 - 0.5) > 0.10 || castMag > 0.08) {
+      out.recommendation = { mode: 'auto-enhance' };
+      out.recommendationLabel = 'Auto-Enhance — looks like a normal photo that needs a tonal nudge';
+    } else {
+      out.recommendation = { mode: 'none' };
+      out.recommendationLabel = 'No automatic action needed — the image is already well-exposed.';
+    }
+    return out;
+  }
+
+  function describeCast(dr, dg, db) {
+    const eps = 0.012;
+    const tags = [];
+    if (dr >  eps) tags.push('warm/red');
+    if (db >  eps) tags.push('cool/blue');
+    if (dg >  eps) tags.push('green');
+    if (dr < -eps) tags.push('cyan-ish');
+    if (db < -eps) tags.push('yellow-ish');
+    if (dg < -eps) tags.push('magenta');
+    return tags.length === 0 ? 'neutral' : tags.join(', ');
+  }
+  function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  // Run the full diagnostic and render it into the inspector panel.
+  function refreshInspector() {
+    const panel = document.querySelector('#demo-inspector');
+    if (!panel) return;
+    if (!baseImageData) {
+      panel.style.display = 'none';
+      return;
+    }
+    const linBuf = imageDataToLinearF32(baseImageData);
+    const stats = analyzeLinear(linBuf, baseW, baseH);
+    const diag = diagnoseFromStats(stats, baseImageData, lastFileSize);
+
+    panel.style.display = 'block';
+    const factsHtml = diag.facts.map(([k, v]) =>
+      `<div class="ipair"><span class="ik">${k}</span><span class="iv">${v}</span></div>`
+    ).join('');
+    const problemsHtml = diag.problems.length === 0
+      ? `<div class="ip-ok">✓ no problems detected — image looks clean</div>`
+      : diag.problems.map(([title, body]) =>
+          `<div class="ip"><span class="ip-tag">${title}</span><span class="ip-body">${body}</span></div>`
+        ).join('');
+    const recBtn = diag.recommendation && diag.recommendation.mode !== 'none'
+      ? `<button class="btn small" id="demo-apply-recommendation">Apply this</button>`
+      : '';
+    panel.innerHTML = `
+      <div class="insp-head">
+        <div class="insp-title">What I can tell about this image</div>
+        <div class="insp-rec">
+          <span class="insp-rec-lbl">Recommendation:</span>
+          <span class="insp-rec-val">${diag.recommendationLabel || '—'}</span>
+          ${recBtn}
+        </div>
+      </div>
+      <div class="insp-grid">
+        <div class="insp-col">
+          <div class="insp-col-head">FACTS</div>
+          <div class="insp-facts">${factsHtml}</div>
+        </div>
+        <div class="insp-col">
+          <div class="insp-col-head">PROBLEMS DETECTED</div>
+          <div class="insp-problems">${problemsHtml}</div>
+        </div>
+      </div>
+    `;
+    // Wire the "Apply this" button to the recommended action.
+    const apply = document.querySelector('#demo-apply-recommendation');
+    if (apply) {
+      apply.addEventListener('click', () => {
+        if (diag.recommendation.mode === 'clarify') {
+          clarifyCctv(diag.recommendation.strength);
+        } else if (diag.recommendation.mode === 'auto-enhance') {
+          autoEnhance();
+        }
+      });
+    }
+  }
+
+  // Track the last loaded file size so the inspector can show it.
+  let lastFileSize = null;
 
   // Build a 4-step (max) chain from the stats. Mirrors the Rust
   // implementation in lumen-cli's auto module.
@@ -1157,9 +1351,16 @@
       [inputCanvas, outputCanvas].forEach(c => { c.width = baseW; c.height = baseH; });
       inputCtx.drawImage(img, 0, 0);
       baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+      // Best-effort file-size for the inspector — fetch HEAD if possible.
+      lastFileSize = null;
+      fetch(url, { method: 'HEAD' }).then(r => {
+        const len = r.headers.get('content-length');
+        if (len) { lastFileSize = +len; refreshInspector(); }
+      }).catch(() => {});
       syncCompareAspect();
       const stamp = $('#demo-render-time');
       if (stamp) stamp.textContent = `Loaded ${captionLabel} (${baseW}×${baseH}). Click Smart Auto to see Lumen analyze + clarify.`;
+      refreshInspector();
       refreshAll();
     };
     img.onerror = () => {
@@ -1218,9 +1419,11 @@
         [inputCanvas, outputCanvas].forEach(c => { c.width = baseW; c.height = baseH; });
         inputCtx.drawImage(img, 0, 0, baseW, baseH);
         baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+        lastFileSize = file.size;
         syncCompareAspect();
         const stamp = $('#demo-render-time');
         if (stamp) stamp.textContent = `Loaded ${file.name} (${baseW}×${baseH})`;
+        refreshInspector();
         refreshAll();
       };
       img.onerror = () => {
@@ -1299,7 +1502,13 @@
       });
       inputCtx.drawImage(img, 0, 0);
       baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+      lastFileSize = null;
+      fetch('sample.png', { method: 'HEAD' }).then(r => {
+        const len = r.headers.get('content-length');
+        if (len) { lastFileSize = +len; refreshInspector(); }
+      }).catch(() => {});
       syncCompareAspect();
+      refreshInspector();
       refreshAll();
     };
     img.onerror = () => {

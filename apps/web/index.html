@@ -415,6 +415,67 @@
   }
   .hint { color: var(--dim); font-size: 13px; }
 
+  /* Image inspector — what Lumen tells you about the input. */
+  #demo-inspector {
+    display: none;
+    margin-top: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px;
+  }
+  #demo-inspector .insp-head {
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 16px;
+    border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 14px;
+  }
+  #demo-inspector .insp-title {
+    font: 13px ui-monospace, monospace; color: var(--accent-2);
+    text-transform: uppercase; letter-spacing: 0.10em; font-weight: 500;
+  }
+  #demo-inspector .insp-rec {
+    margin-left: auto; display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+  }
+  #demo-inspector .insp-rec-lbl { color: var(--dim); }
+  #demo-inspector .insp-rec-val {
+    color: var(--accent-2); padding: 4px 9px;
+    background: rgba(214,168,84,0.08); border: 1px solid rgba(214,168,84,0.25);
+    border-radius: 4px;
+  }
+  #demo-inspector .insp-grid {
+    display: grid; grid-template-columns: 1fr 1.4fr; gap: 18px;
+  }
+  #demo-inspector .insp-col-head {
+    font: 10px ui-monospace, monospace; color: var(--dim);
+    letter-spacing: 0.16em; margin-bottom: 8px;
+  }
+  #demo-inspector .insp-facts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px;
+    font: 12px ui-monospace, monospace;
+  }
+  #demo-inspector .ipair { display: flex; gap: 8px; }
+  #demo-inspector .ik { color: var(--dim); min-width: 88px; }
+  #demo-inspector .iv { color: var(--fg); }
+  #demo-inspector .insp-problems {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #demo-inspector .ip {
+    background: rgba(214, 84, 84, 0.06); border-left: 3px solid var(--warn);
+    padding: 6px 10px; border-radius: 0 4px 4px 0;
+    font-size: 12px; line-height: 1.45;
+  }
+  #demo-inspector .ip-tag {
+    font-weight: 500; color: var(--warn); margin-right: 8px;
+  }
+  #demo-inspector .ip-body { color: var(--fg); }
+  #demo-inspector .ip-ok {
+    color: var(--good); font-size: 12px;
+    background: rgba(110, 201, 127, 0.06); border-left: 3px solid var(--good);
+    padding: 6px 10px; border-radius: 0 4px 4px 0;
+  }
+  @media (max-width: 720px) {
+    #demo-inspector .insp-grid { grid-template-columns: 1fr; }
+    #demo-inspector .insp-facts { grid-template-columns: 1fr; }
+  }
+
   /* Stages strip — click-to-use-this-as-output */
   .stages-row {
     margin-top: 18px;
@@ -619,6 +680,7 @@
         <option value="light">light</option>
         <option value="standard" selected>standard</option>
         <option value="aggressive">aggressive</option>
+        <option value="plate">plate · max readability</option>
       </select>
       <label class="file-pick">
         Upload your own image…
@@ -662,6 +724,9 @@
     </div>
 
     <div id="demo-stats"></div>
+
+    <!-- Image inspector — what Lumen sees about the input. -->
+    <div id="demo-inspector"></div>
 
     <div class="chain-strip" id="demo-chain"></div>
 
