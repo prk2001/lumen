@@ -12,13 +12,33 @@ use lumen_core::{Asset, AssetKind, AssetMetadata, ColorSpace, Error, Result};
 use tracing::instrument;
 
 /// Probe a single file, returning a populated [`AssetMetadata`].
+///
+/// We first try the still-image fast path via the `image` crate. ANY
+/// failure on that path (unknown extension, no magic match, decoder
+/// error) falls through to FFmpeg-backed video probing. The
+/// still-image path is unchanged from Phase 1; existing
+/// PNG/JPEG/TIFF/WebP/BMP behavior is preserved.
 #[instrument(skip_all, fields(path = %path.as_ref().display()))]
 pub fn probe_path<P: AsRef<Path>>(path: P) -> Result<AssetMetadata> {
     let path = path.as_ref();
+    match probe_via_image(path) {
+        Ok(m) => Ok(m),
+        Err(_) => probe_via_video(path),
+    }
+}
+
+fn probe_via_image(path: &Path) -> Result<AssetMetadata> {
     let reader = ImageReader::open(path)
         .map_err(|e| Error::decode_at(path.to_path_buf(), format!("open: {e}")))?
         .with_guessed_format()
         .map_err(|e| Error::decode_at(path.to_path_buf(), format!("guess fmt: {e}")))?;
+
+    if reader.format().is_none() {
+        return Err(Error::UnsupportedFormat(format!(
+            "not a recognized still image: {}",
+            path.display()
+        )));
+    }
 
     let format = reader.format();
     let dims = reader
@@ -46,6 +66,12 @@ pub fn probe_path<P: AsRef<Path>>(path: P) -> Result<AssetMetadata> {
     })
 }
 
+/// Fallback: probe via FFmpeg for files the `image` crate doesn't grok.
+fn probe_via_video(path: &Path) -> Result<AssetMetadata> {
+    let probe = crate::video::probe_video(path)?;
+    Ok(probe.into_asset_metadata())
+}
+
 /// Probe a file and return a populated [`Asset`] with an `AssetId`,
 /// inferred kind, and BLAKE3 hash of the file bytes.
 #[instrument(skip_all, fields(path = %path.as_ref().display()))]
@@ -61,7 +87,15 @@ pub fn probe<P: AsRef<Path>>(path: P) -> Result<Asset> {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf()).display()
     );
     let hash = crate::hash::hash_file(path).ok();
-    let mut asset = Asset::new(uri, display_name, AssetKind::StillImage);
+    // Heuristic: anything with >1 frame or a frame rate is treated as video.
+    let kind = if metadata.frame_count.map(|n| n > 1).unwrap_or(false)
+        || metadata.frame_rate.is_some()
+    {
+        AssetKind::Video
+    } else {
+        AssetKind::StillImage
+    };
+    let mut asset = Asset::new(uri, display_name, kind);
     asset.metadata = metadata;
     asset.hash = hash;
     Ok(asset)

@@ -98,8 +98,12 @@ cargo build --bin cli
 # 3. Probe an image
 ./target/debug/cli probe path/to/photo.png
 
-# 4. List the registered effects (Phase 1: 11 effects, 7 categories)
+# 4. List the registered effects (18 effects across 13 spec categories)
 ./target/debug/cli list-effects
+
+# 4b. Compute reference-based quality metrics between two images
+./target/debug/cli measure --a original.png --b processed.png
+#   { "mse": 0.0545, "psnr": 12.63, "ssim": 0.94, ... }
 
 # 5. Apply a single effect
 ./target/debug/cli apply \

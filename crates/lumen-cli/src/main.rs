@@ -89,6 +89,15 @@ enum Command {
         #[arg(long, default_value_t = 92)]
         jpeg_quality: u8,
     },
+    /// Compute reference-based image-quality metrics between two files.
+    Measure {
+        /// Reference / "A" file.
+        #[arg(long)]
+        a: PathBuf,
+        /// Test / "B" file. Must match A's dimensions.
+        #[arg(long)]
+        b: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -119,7 +128,24 @@ fn run(cli: Cli) -> Result<()> {
                 .context("tokio runtime")?;
             rt.block_on(serve::run(recipe, port, jpeg_quality, registry))
         }
+        Command::Measure { a, b } => cmd_measure(&a, &b),
     }
+}
+
+fn cmd_measure(a: &std::path::Path, b: &std::path::Path) -> Result<()> {
+    let frame_a = decode_image(a).map_err(|e| anyhow!("decode a: {e}"))?;
+    let frame_b = decode_image(b).map_err(|e| anyhow!("decode b: {e}"))?;
+    let m = lumen_measure::all_metrics(&frame_a, &frame_b)
+        .map_err(|e| anyhow!("metrics: {e}"))?;
+    let json = serde_json::json!({
+        "mse":  m.mse,
+        "psnr": m.psnr,
+        "ssim": m.ssim,
+        "a":    a.display().to_string(),
+        "b":    b.display().to_string(),
+    });
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
 }
 
 fn init_tracing(level: u8) {
@@ -158,6 +184,10 @@ fn build_registry() -> Result<EffectRegistry> {
     lumen_fx_deblur::register_all(&r).map_err(|e| anyhow!("register deblur: {e}"))?;
     lumen_fx_temporal::register_all(&r).map_err(|e| anyhow!("register temporal: {e}"))?;
     lumen_fx_weather::register_all(&r).map_err(|e| anyhow!("register weather: {e}"))?;
+    lumen_fx_compression::register_all(&r).map_err(|e| anyhow!("register compression: {e}"))?;
+    lumen_fx_face::register_all(&r).map_err(|e| anyhow!("register face: {e}"))?;
+    lumen_fx_text::register_all(&r).map_err(|e| anyhow!("register text: {e}"))?;
+    lumen_fx_modalities::register_all(&r).map_err(|e| anyhow!("register modalities: {e}"))?;
     Ok(r)
 }
 

@@ -18,10 +18,12 @@
 pub mod hash;
 pub mod probe;
 pub mod still;
+pub mod video;
 
 pub use hash::hash_file;
 pub use probe::{probe, probe_path};
 pub use still::{decode_image, encode_image, ImageEncodeOptions};
+pub use video::{decode_video_frame, decode_video_range, probe_video, VideoProbe};
 
 /// Crate-level version string surfaced for diagnostics.
 pub const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");

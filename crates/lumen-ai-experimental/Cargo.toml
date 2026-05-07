@@ -1,0 +1,38 @@
+[package]
+name = "lumen-ai"
+description = "ONNX Runtime inference, model registry, hardware EP routing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+thiserror.workspace = true
+tracing.workspace = true
+
+# ONNX Runtime bindings.
+#
+# `download-binaries` causes ort-sys to fetch the matching ONNX Runtime shared
+# library from the official binary mirror at first build, so contributors do
+# NOT need a system install. The runtime is cached under `target/`.
+#
+# On macOS we additionally enable the `coreml` feature so we can register the
+# CoreML execution provider when loading sessions; ort's default EP routing
+# falls back to CPU automatically when CoreML isn't available (or on other
+# platforms).
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "copy-dylibs"] }
+
+# Tensor manipulation. ndarray is ort's native numeric exchange type.
+ndarray = { workspace = true }
+
+# Hashing for the (Phase-1 stub) model registry — verifies sha256 of locally
+# present model files.
+sha2 = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "copy-dylibs", "coreml"] }
+
+[dev-dependencies]
+tempfile = "3.10"

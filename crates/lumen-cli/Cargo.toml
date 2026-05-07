@@ -21,6 +21,11 @@ lumen-fx-stabilize = { path = "../lumen-fx-stabilize" }
 lumen-fx-deblur = { path = "../lumen-fx-deblur" }
 lumen-fx-temporal = { path = "../lumen-fx-temporal" }
 lumen-fx-weather = { path = "../lumen-fx-weather" }
+lumen-fx-compression = { path = "../lumen-fx-compression" }
+lumen-fx-face = { path = "../lumen-fx-face" }
+lumen-fx-text = { path = "../lumen-fx-text" }
+lumen-fx-modalities = { path = "../lumen-fx-modalities" }
+lumen-measure = { path = "../lumen-measure" }
 tokio.workspace = true
 axum.workspace = true
 thiserror.workspace = true

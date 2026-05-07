@@ -11,6 +11,19 @@ development demands ruthless prioritization.
 > CCTV restoration, batch enhancement) within 12–18 months and
 > grow outward.
 
+## Status as of this commit
+
+| Phase | Status |
+|---|---|
+| 0 — Scaffold | ✅ Done |
+| 1 — Ingest + preview + export | ✅ Done (still images; FFmpeg in progress) |
+| 2 — AI restoration | 🟡 Infrastructure stashed (`lumen-ai-experimental/`) — `ort` 2.0.0-rc has a Rust 1.95 build issue, revisit once upstream releases compatible RC |
+| 3 — Color + masking | 🟡 Partial (LUTs deferred; rect mask shipped) |
+| 4 — Motion + temporal | 🟡 Partial (translate + motion blur shipped; full stabilize/RIFE deferred) |
+| 5–6 — Forensic / cloud / SDK | ⏳ Future |
+
+Effect coverage: **18 effects across 13 of 30 spec categories**.
+
 ## Phase 0 — Scaffold *(this session)*
 
 **Goal:** Workspace compiles. Architecture committed. Roadmap clear.

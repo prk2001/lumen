@@ -1,46 +1,89 @@
 # Desktop app (Tauri 2 + React)
 
-This directory will host the Lumen desktop application. Initial scaffold
-is **deferred to Phase 1 / Milestone 1.5** to avoid pulling Node and
-Tauri tooling in before the core engine has anything to display.
+The Lumen desktop application — a Tauri 2 shell hosting a React + TypeScript
+UI built with Vite. Scaffolded in Phase 1 / Milestone 1.5.
 
-## When ready, scaffold with:
+## What this currently is (Phase 1)
+
+A thin desktop shell that embeds an `<iframe>` pointed at the `lumen-cli`
+`serve` subcommand. To use it locally:
 
 ```bash
-cd ~/Lumen/apps
-npm create tauri-app@latest desktop -- \
-  --template react-ts \
-  --identifier com.primorispartners.lumen \
-  --manager pnpm
+# Terminal 1 — start the live preview server (separate process)
+cargo run -p lumen-cli -- serve --recipe path/to/recipe.toml
+#  -> serves the live preview UI at http://127.0.0.1:8723/
+
+# Terminal 2 — launch the desktop shell
+cd ~/Lumen/apps/desktop
+pnpm tauri dev
 ```
 
-Then add `crates/lumen-core` and friends to `src-tauri/Cargo.toml` so
-the desktop app shares the same engine as the CLI and server.
+The window opens at 1280x800 with the title "Lumen" and loads the iframe
+from `http://127.0.0.1:8723/`. A small banner at the top reminds you that
+`lumen serve` must be running.
 
-## Why deferred
+## What this will become (Phase 2+)
 
-Spinning up a Tauri app installs several hundred MB of Node modules and
-adds a second build system (Vite). Until the Rust core does something
-worth previewing, the engineering value is zero. Scaffolding it
-prematurely also locks in framework versions that may shift before
-we're ready to commit.
+Once the IPC layer is in place, the iframe goes away and the React UI
+talks to the pipeline directly through Tauri commands defined in
+`src-tauri/src/commands/`. At that point the desktop app no longer
+depends on the HTTP server — it links the `lumen-*` crates directly into
+`src-tauri/Cargo.toml`.
 
-## Once scaffolded, expected layout:
+## Workspace boundary
+
+The `src-tauri/` crate is intentionally **standalone** — it is *not* a
+member of the root Lumen Cargo workspace. The empty `[workspace]` table
+in `src-tauri/Cargo.toml` makes that explicit. This avoids dragging the
+heavy Tauri build graph (webview-sys, wry, gtk, etc.) into every
+`cargo build` at the workspace root. Once we wire the desktop app to
+`lumen-core` and friends, those crates will be added as
+`{ path = "../../../crates/lumen-core" }` dependencies — still without
+joining the workspace.
+
+## Layout
 
 ```text
 apps/desktop/
-├── package.json              # pnpm + Vite + React
+├── package.json              # pnpm + Vite + React + @tauri-apps/api
+├── index.html                # Vite entry
+├── vite.config.ts
 ├── src/                      # React UI
-│   ├── App.tsx
+│   ├── App.tsx               # iframe shell -> http://127.0.0.1:8723/
 │   ├── main.tsx
-│   ├── pages/
-│   ├── panels/               # Inspector, Timeline, Viewer, Layers
-│   └── lib/
+│   ├── App.css
+│   └── assets/
 ├── src-tauri/
-│   ├── Cargo.toml            # Tauri runtime + lumen-* dependencies
-│   ├── tauri.conf.json
+│   ├── Cargo.toml            # standalone; will gain lumen-* deps later
+│   ├── tauri.conf.json       # title "Lumen", 1280x800
+│   ├── build.rs
+│   ├── capabilities/
+│   ├── icons/
 │   └── src/
 │       ├── main.rs
-│       └── commands/         # IPC bridge to lumen-core
+│       └── lib.rs            # commands/ will live here in Phase 2
 └── public/
 ```
+
+## Useful commands
+
+```bash
+pnpm install                              # install JS deps
+pnpm dev                                  # Vite-only (no Tauri window)
+pnpm tauri dev                            # full desktop app, hot-reload
+pnpm tauri build --debug --no-bundle      # smoke-test compile, no installer
+pnpm tauri build                          # release build with installer
+```
+
+## Identifier
+
+The bundle identifier is `com.primorispartners.lumen` and the product
+name is `Lumen`, set in `src-tauri/tauri.conf.json`.
+
+## Recommended IDE setup
+
+[VS Code](https://code.visualstudio.com/) plus the
+[Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode)
+and
+[rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+extensions.
