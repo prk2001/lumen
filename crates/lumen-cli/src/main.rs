@@ -10,6 +10,8 @@
 //! - `serve --recipe R.json [--port 8080]` — live HTTP preview that
 //!   re-renders on file changes and shows side-by-side input / output.
 
+mod auto;
+mod clarify;
 mod serve;
 mod video_pipeline;
 
@@ -171,6 +173,30 @@ enum Command {
         /// Directory of `*.case.json` files.
         #[arg(long)] cases: PathBuf,
     },
+    /// Auto-enhance: analyze the input, pick optimal effect parameters,
+    /// build a 4-step chain (BC -> gamma -> saturation -> sharpen),
+    /// and run it. Mirrors the in-browser demo's auto-enhance button.
+    AutoEnhance {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// If set, print the analyzed recipe JSON to stdout instead
+        /// of running it.
+        #[arg(long)] print_recipe: bool,
+    },
+    /// Surveillance / forensic clarification preset — denoise + deblock
+    /// + dehaze + CLAHE + laplacian deblur + sharpen + tone stretch.
+    ///
+    /// Optimized for CCTV / cell-phone / low-quality stills.
+    Clarify {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// Strength of the chain: light / standard / aggressive.
+        #[arg(long, default_value = "standard")] strength: String,
+        /// 2x bicubic upscale at the end (default true).
+        #[arg(long, default_value_t = true)] upscale: bool,
+        /// Print the recipe JSON to stdout instead of running it.
+        #[arg(long)] print_recipe: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -223,7 +249,118 @@ fn run(cli: Cli) -> Result<()> {
             cmd_plugin(&plugin, &input, &output, &params)
         }
         Command::Qa { cases } => cmd_qa(&cases),
+        Command::AutoEnhance { input, output, print_recipe } => {
+            cmd_auto_enhance(&input, &output, print_recipe)
+        }
+        Command::Clarify { input, output, strength, upscale, print_recipe } => {
+            cmd_clarify(&input, &output, &strength, upscale, print_recipe)
+        }
     }
+}
+
+// ─── Auto-enhance + clarify dispatch ─────────────────────────────────────
+
+fn run_chain_in_memory(recipe: &Recipe) -> Result<()> {
+    let registry = build_registry()?;
+    let mut graph = Graph::new();
+    let src_node = graph.insert(Node::new(special_effect_ids::SOURCE, "source"));
+    let mut prev = src_node;
+    for (i, step) in recipe.chain.iter().enumerate() {
+        let mut params = ParamValues::new();
+        if let serde_json::Value::Object(map) = &step.params {
+            for (k, v) in map {
+                let pv = json_to_param(v).ok_or_else(|| {
+                    anyhow!("step {i}: param '{k}' has unsupported JSON type")
+                })?;
+                params.insert(k.clone(), pv);
+            }
+        }
+        let label = step.label.clone().unwrap_or_else(|| format!("step{i:02}"));
+        let node = graph.insert(
+            Node::new(step.effect.clone(), label).with_input(prev).with_params(params),
+        );
+        prev = node;
+    }
+    let sink_node = graph.insert(Node::new(special_effect_ids::SINK, "sink").with_input(prev));
+    graph.add_sink(sink_node);
+
+    let mut ctx = Context::for_still_srgb();
+    let written = std::cell::RefCell::new(None::<PathBuf>);
+    let input_path = recipe.input.clone();
+    let output_path = recipe.output.clone();
+    let source = CliSource(move |_id: NodeId, _params: &ParamValues| -> lumen_core::Result<Frame> {
+        decode_image(&input_path)
+    });
+    let sink = CliSink(move |_id: NodeId, _params: &ParamValues, frame: Frame| -> lumen_core::Result<()> {
+        let p = encode_image(
+            frame,
+            &output_path,
+            ImageEncodeOptions { jpeg_quality: 92, format: None },
+        )?;
+        *written.borrow_mut() = Some(p);
+        Ok(())
+    });
+    let mut sched = Scheduler {
+        registry: &registry,
+        ctx: &mut ctx,
+        source_loader: source,
+        sink_writer: sink,
+    };
+    sched.run(&graph).map_err(|e| anyhow!("scheduler: {e}"))?;
+    Ok(())
+}
+
+fn cmd_auto_enhance(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    print_recipe: bool,
+) -> Result<()> {
+    let (stats, recipe) = auto::analyze_path(input, output)?;
+    if print_recipe {
+        println!("{}", serde_json::to_string_pretty(&recipe)?);
+        return Ok(());
+    }
+    eprintln!(
+        "stats: p01={:.3} p50={:.3} p99={:.3} chroma̅={:.3} edges̅={:.3} luma̅={:.3}",
+        stats.p01, stats.p50, stats.p99,
+        stats.chroma_mean, stats.edge_mean, stats.luminance_mean,
+    );
+    eprintln!(
+        "auto chain ({} steps):",
+        recipe.chain.len()
+    );
+    for s in &recipe.chain {
+        eprintln!("  {} {}", s.effect, s.params);
+    }
+    run_chain_in_memory(&recipe)?;
+    println!("wrote {}", output.display());
+    Ok(())
+}
+
+fn cmd_clarify(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    strength: &str,
+    upscale: bool,
+    print_recipe: bool,
+) -> Result<()> {
+    let recipe = clarify::build_clarify_recipe(input, output, strength, upscale)?;
+    if print_recipe {
+        println!("{}", serde_json::to_string_pretty(&recipe)?);
+        return Ok(());
+    }
+    eprintln!(
+        "clarify ({} strength, upscale={}, {} steps):",
+        strength,
+        upscale,
+        recipe.chain.len()
+    );
+    for s in &recipe.chain {
+        eprintln!("  {} {}", s.effect, s.params);
+    }
+    run_chain_in_memory(&recipe)?;
+    println!("wrote {}", output.display());
+    Ok(())
 }
 
 fn cmd_video_pipeline(
