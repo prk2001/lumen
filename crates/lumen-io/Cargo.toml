@@ -1,11 +1,28 @@
 [package]
 name = "lumen-io"
-description = "Input/output: still images now (image crate); FFmpeg, RAW, HEIF/AVIF/JXL come in later milestones"
+description = "Input/output: still images (image crate + RAW + optional HEIF/AVIF/JXL) and FFmpeg-backed video"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[features]
+# Default build keeps things lean: pure-Rust still-image formats + RAW
+# (rawloader is pure Rust) + FFmpeg video. The heavy / system-dep
+# decoders live behind opt-in features so a fresh `cargo build -p
+# lumen-io` works without libheif / libdav1d / libjxl on the host.
+default = []
+# Enable HEIF/HEIC decoding via libheif-rs. Requires `libheif` to be
+# installed on the host system (Homebrew: `brew install libheif`).
+heif = ["dep:libheif-rs"]
+# Enable JPEG XL decoding via jpegxl-rs. Requires `libjxl` to be
+# installed on the host system (Homebrew: `brew install jpeg-xl`).
+jxl = ["dep:jpegxl-rs"]
+# Enable AVIF decoding by turning on the `image` crate's native AVIF
+# decoder (mp4parse + dav1d). Requires `libdav1d` on the host
+# (Homebrew: `brew install dav1d`).
+avif = ["image/avif-native"]
 
 [dependencies]
 lumen-core = { path = "../lumen-core" }
@@ -20,6 +37,12 @@ blake3.workspace = true
 # /opt/homebrew/opt/ffmpeg/lib/pkgconfig (Apple Silicon) before building.
 # Tested against system FFmpeg 8.x.
 ffmpeg-next = "8"
+# Pure-Rust RAW decoder — Canon CR2, Nikon NEF, Sony ARW, Adobe DNG,
+# Fuji RAF, Olympus ORF, etc. No system deps. Always built in.
+rawloader = "0.37"
+# Optional heavy decoders — gated behind their respective features above.
+libheif-rs = { version = "1", optional = true }
+jpegxl-rs = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3.13"

@@ -9,5 +9,9 @@ repository.workspace = true
 
 [dependencies]
 lumen-core = { path = "../lumen-core" }
+parking_lot.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

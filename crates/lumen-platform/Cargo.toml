@@ -9,5 +9,18 @@ repository.workspace = true
 
 [dependencies]
 lumen-core = { path = "../lumen-core" }
+lumen-auth = { path = "../lumen-auth" }
 thiserror.workspace = true
 tracing.workspace = true
+
+# Cat 29 — platform detection + license verification
+serde = { workspace = true }
+serde_json = { workspace = true }
+time = { workspace = true }
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# Pulled in transitively via lumen-auth, but listed explicitly so the
+# `Signer` trait is reachable for license signing.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+[dev-dependencies]
+tempfile = "3"

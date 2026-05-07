@@ -1,45 +1,54 @@
 # Desktop app (Tauri 2 + React)
 
-The Lumen desktop application — a Tauri 2 shell hosting a React + TypeScript
-UI built with Vite. Scaffolded in Phase 1 / Milestone 1.5.
+The Lumen desktop application — a Tauri 2 shell hosting a React +
+TypeScript UI built with Vite. The Rust side links the `lumen-*` crates
+directly and exposes them to the frontend through Tauri IPC commands;
+no separate `lumen serve` HTTP process is required.
 
-## What this currently is (Phase 1)
+## What this currently is
 
-A thin desktop shell that embeds an `<iframe>` pointed at the `lumen-cli`
-`serve` subcommand. To use it locally:
+A native window that talks to the in-process pipeline. The React UI:
+
+1. Loads the effect registry at startup via `invoke('list_effects')`.
+2. Lets you pick an input file path, output file path, and an effect.
+3. Renders sliders / toggles / dropdowns from each effect's parameter
+   spec.
+4. Calls `invoke('apply_effect', …)` on demand and renders the output
+   image inline (via the `convertFileSrc` asset protocol).
+
+To run it locally:
 
 ```bash
-# Terminal 1 — start the live preview server (separate process)
-cargo run -p lumen-cli -- serve --recipe path/to/recipe.toml
-#  -> serves the live preview UI at http://127.0.0.1:8723/
-
-# Terminal 2 — launch the desktop shell
 cd ~/Lumen/apps/desktop
+pnpm install
 pnpm tauri dev
 ```
 
-The window opens at 1280x800 with the title "Lumen" and loads the iframe
-from `http://127.0.0.1:8723/`. A small banner at the top reminds you that
-`lumen serve` must be running.
+## Tauri commands exposed
 
-## What this will become (Phase 2+)
+Defined in `src-tauri/src/commands.rs` and registered in
+`src-tauri/src/lib.rs`:
 
-Once the IPC layer is in place, the iframe goes away and the React UI
-talks to the pipeline directly through Tauri commands defined in
-`src-tauri/src/commands/`. At that point the desktop app no longer
-depends on the HTTP server — it links the `lumen-*` crates directly into
-`src-tauri/Cargo.toml`.
+| Command         | Signature                                                                                                | Notes                                       |
+| --------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `list_effects`  | `() -> Vec<EffectInfo>`                                                                                  | id + display_name + parameter specs         |
+| `probe`         | `(path: String) -> Result<AssetMetadataDto, String>`                                                     | wraps `lumen_io::probe`                     |
+| `apply_effect`  | `(input_path, output_path, effect_id, params: serde_json::Value) -> Result<(), String>`                  | single-effect render                        |
+| `run_pipeline`  | `(recipe_json, input_path, output_path) -> Result<RenderStats, String>`                                  | multi-stage chain; `RenderStats { duration_ms, output_bytes }` |
+
+The starter set of fx crates linked into the binary is:
+`lumen-fx-exposure`, `lumen-fx-color`, `lumen-fx-sharpen`,
+`lumen-fx-denoise`, `lumen-fx-geometric`. Add more by extending
+`registry()` in `commands.rs` and `Cargo.toml`.
 
 ## Workspace boundary
 
 The `src-tauri/` crate is intentionally **standalone** — it is *not* a
 member of the root Lumen Cargo workspace. The empty `[workspace]` table
 in `src-tauri/Cargo.toml` makes that explicit. This avoids dragging the
-heavy Tauri build graph (webview-sys, wry, gtk, etc.) into every
-`cargo build` at the workspace root. Once we wire the desktop app to
-`lumen-core` and friends, those crates will be added as
-`{ path = "../../../crates/lumen-core" }` dependencies — still without
-joining the workspace.
+Tauri build graph into every `cargo build` at the workspace root. The
+`lumen-*` crates are pulled in through `path = "../../../crates/…"`
+references rather than by joining the workspace.
 
 ## Layout
 
@@ -49,19 +58,20 @@ apps/desktop/
 ├── index.html                # Vite entry
 ├── vite.config.ts
 ├── src/                      # React UI
-│   ├── App.tsx               # iframe shell -> http://127.0.0.1:8723/
+│   ├── App.tsx               # IPC client, effects UI
+│   ├── App.css               # dark theme
 │   ├── main.tsx
-│   ├── App.css
 │   └── assets/
 ├── src-tauri/
-│   ├── Cargo.toml            # standalone; will gain lumen-* deps later
-│   ├── tauri.conf.json       # title "Lumen", 1280x800
+│   ├── Cargo.toml            # standalone; depends on lumen-* by path
+│   ├── tauri.conf.json       # title "Lumen", 1280x800, asset protocol on
 │   ├── build.rs
 │   ├── capabilities/
 │   ├── icons/
 │   └── src/
 │       ├── main.rs
-│       └── lib.rs            # commands/ will live here in Phase 2
+│       ├── lib.rs            # registers IPC commands
+│       └── commands.rs       # IPC command implementations
 └── public/
 ```
 

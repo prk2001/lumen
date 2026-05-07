@@ -9,5 +9,20 @@ repository.workspace = true
 
 [dependencies]
 lumen-core = { path = "../lumen-core" }
+lumen-workflow = { path = "../lumen-workflow" }
+lumen-auth = { path = "../lumen-auth" }
 thiserror.workspace = true
 tracing.workspace = true
+
+# Cat 24 — bundles, share links, diff & merge
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+ed25519-dalek = "2"
+zip = "2"
+rand = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

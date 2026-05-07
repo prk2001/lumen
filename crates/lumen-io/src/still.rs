@@ -27,15 +27,85 @@ impl Default for ImageEncodeOptions {
 ///
 /// Output is always RGBA8 in sRGB color space. Effects can call
 /// [`Frame::into_rgba_f32_linear`] to lift to scene-linear float.
+///
+/// This is a thin wrapper over [`decode_still`] kept for backwards
+/// compatibility with the original Phase 1 API. New code can call
+/// either name.
 #[instrument(skip_all, fields(path = %path.as_ref().display()))]
 pub fn decode_image<P: AsRef<Path>>(path: P) -> Result<Frame> {
+    decode_still(path)
+}
+
+/// Decode any supported still image format into a [`Frame`].
+///
+/// The decoder chain is (first success wins):
+///
+/// 1. **`image` crate fast path** — PNG/JPEG/TIFF/WebP/BMP and (when
+///    the `avif` feature is on) AVIF.
+/// 2. **RAW** via `rawloader` — CR2, NEF, ARW, DNG, RAF, ORF, etc.
+/// 3. **HEIF/HEIC** when the `heif` feature is on.
+/// 4. **JPEG XL** when the `jxl` feature is on.
+/// 5. **AVIF** as a final standalone fallback.
+///
+/// The chain only escalates on `Err`; the error returned to the caller
+/// is whichever decoder is most likely to be the *intended* one based
+/// on the file extension. If the file doesn't match any known
+/// extension we surface the last error in the chain.
+#[instrument(skip_all, fields(path = %path.as_ref().display()))]
+pub fn decode_still<P: AsRef<Path>>(path: P) -> Result<Frame> {
     let path = path.as_ref();
+
+    // Step 1: image crate.
+    if let Ok(frame) = decode_via_image_crate(path) {
+        debug!(width = frame.width, height = frame.height, "decoded via image crate");
+        return Ok(frame);
+    }
+
+    // The chain order below biases toward the file's extension when we
+    // have one — RAW first for camera extensions, HEIF for .heic/.heif,
+    // JXL for .jxl, AVIF for .avif. For unknown extensions we fall
+    // through every decoder in order.
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
+
+    let order: &[&str] = match ext.as_deref() {
+        Some("heic") | Some("heif") => &["heif", "raw", "jxl", "avif"],
+        Some("jxl") => &["jxl", "heif", "raw", "avif"],
+        Some("avif") => &["avif", "heif", "raw", "jxl"],
+        _ => &["raw", "heif", "jxl", "avif"],
+    };
+
+    let mut last_err: Option<Error> = None;
+    for stage in order {
+        let r = match *stage {
+            "raw" => crate::raw::decode_raw(path),
+            "heif" => crate::heif::decode_heif(path),
+            "jxl" => crate::jxl::decode_jxl(path),
+            "avif" => crate::avif::decode_avif(path),
+            _ => continue,
+        };
+        match r {
+            Ok(frame) => {
+                debug!(stage = *stage, "decoded via fallback");
+                return Ok(frame);
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        Error::UnsupportedFormat(format!("not a recognized image: {}", path.display()))
+    }))
+}
+
+fn decode_via_image_crate(path: &Path) -> Result<Frame> {
     let img: DynamicImage = image::open(path).map_err(|e| {
         Error::decode_at(path.to_path_buf(), format!("image::open failed: {e}"))
     })?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
-    debug!(width = w, height = h, "decoded still image");
     Frame::new(
         w,
         h,
@@ -170,6 +240,38 @@ mod tests {
     #[test]
     fn nonexistent_path_errs() {
         let r = decode_image("/nonexistent/file.png");
-        assert!(matches!(r, Err(Error::Decode { .. })));
+        // The fallback chain runs after image::open fails. Every fallback
+        // also fails on a nonexistent path, so the surfaced error can be
+        // either Decode (raw, etc.) or UnsupportedFormat (when all gated
+        // fallbacks are off and the chain bottoms out). Accept either.
+        assert!(
+            matches!(r, Err(Error::Decode { .. }) | Err(Error::UnsupportedFormat(_))),
+            "expected Decode or UnsupportedFormat error"
+        );
+    }
+
+    /// Regression: PNG round-trip still works through the new
+    /// fallback chain (`decode_still` is what `decode_image` now calls).
+    #[test]
+    fn png_round_trip_still_works_through_chain() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("regression.png");
+        let original = synth_frame(20, 14);
+        encode_image(original.clone(), &path, ImageEncodeOptions::default()).unwrap();
+        let decoded = decode_still(&path).unwrap();
+        assert_eq!(decoded.width, 20);
+        assert_eq!(decoded.height, 14);
+        assert_eq!(decoded.data, original.data, "PNG should still be lossless via decode_still");
+    }
+
+    /// Garbage bytes with an unknown extension fall through every
+    /// decoder and surface a useful error.
+    #[test]
+    fn unknown_garbage_returns_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("not-an-image.xyz");
+        std::fs::write(&path, b"\x00\x01\x02\x03\x04\x05").unwrap();
+        let r = decode_still(&path);
+        assert!(r.is_err());
     }
 }

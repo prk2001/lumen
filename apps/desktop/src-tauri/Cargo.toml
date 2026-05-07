@@ -24,8 +24,20 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Lumen core + I/O + a starter set of fx crates. These crates are
+# referenced by path but are NOT pulled into the root Cargo workspace —
+# the empty `[workspace]` table at the top of this file enforces that
+# boundary. Tauri builds this crate as a standalone unit.
+lumen-core = { path = "../../../crates/lumen-core" }
+lumen-io = { path = "../../../crates/lumen-io" }
+lumen-fx-exposure = { path = "../../../crates/lumen-fx-exposure" }
+lumen-fx-color = { path = "../../../crates/lumen-fx-color" }
+lumen-fx-sharpen = { path = "../../../crates/lumen-fx-sharpen" }
+lumen-fx-denoise = { path = "../../../crates/lumen-fx-denoise" }
+lumen-fx-geometric = { path = "../../../crates/lumen-fx-geometric" }
 

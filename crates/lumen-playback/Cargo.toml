@@ -11,3 +11,5 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+parking_lot = { workspace = true }
+rayon = { workspace = true }

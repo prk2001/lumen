@@ -13,17 +13,58 @@ use tracing::instrument;
 
 /// Probe a single file, returning a populated [`AssetMetadata`].
 ///
-/// We first try the still-image fast path via the `image` crate. ANY
-/// failure on that path (unknown extension, no magic match, decoder
-/// error) falls through to FFmpeg-backed video probing. The
-/// still-image path is unchanged from Phase 1; existing
+/// The probe chain is, in order:
+///
+/// 1. **`image` crate** — PNG/JPEG/TIFF/WebP/BMP, plus AVIF when the
+///    `avif` feature is enabled.
+/// 2. **RAW** via `rawloader` — CR2/NEF/ARW/DNG/RAF/ORF and friends.
+/// 3. **HEIF/HEIC** when the `heif` feature is on.
+/// 4. **JPEG XL** when the `jxl` feature is on.
+/// 5. **AVIF** as a standalone fallback.
+/// 6. **FFmpeg** — video / animated containers.
+///
+/// On unknown extensions every step is tried; on a known still-image
+/// extension we bias the order so the *intended* decoder runs first.
+/// The `image` crate fast path is unchanged from Phase 1, so existing
 /// PNG/JPEG/TIFF/WebP/BMP behavior is preserved.
 #[instrument(skip_all, fields(path = %path.as_ref().display()))]
 pub fn probe_path<P: AsRef<Path>>(path: P) -> Result<AssetMetadata> {
     let path = path.as_ref();
-    match probe_via_image(path) {
+    if let Ok(m) = probe_via_image(path) {
+        return Ok(m);
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase());
+
+    let order: &[&str] = match ext.as_deref() {
+        Some("heic") | Some("heif") => &["heif", "raw", "jxl", "avif"],
+        Some("jxl") => &["jxl", "heif", "raw", "avif"],
+        Some("avif") => &["avif", "heif", "raw", "jxl"],
+        _ => &["raw", "heif", "jxl", "avif"],
+    };
+
+    let mut last_err: Option<Error> = None;
+    for stage in order {
+        let r = match *stage {
+            "raw" => crate::raw::probe_raw(path),
+            "heif" => crate::heif::probe_heif(path),
+            "jxl" => crate::jxl::probe_jxl(path),
+            "avif" => crate::avif::probe_avif(path),
+            _ => continue,
+        };
+        match r {
+            Ok(m) => return Ok(m),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    // Final fallback: video containers.
+    match probe_via_video(path) {
         Ok(m) => Ok(m),
-        Err(_) => probe_via_video(path),
+        Err(e) => Err(last_err.unwrap_or(e)),
     }
 }
 
@@ -144,5 +185,17 @@ mod tests {
         assert_eq!(asset.kind, AssetKind::StillImage);
         assert!(asset.hash.as_ref().unwrap().starts_with("blake3:"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Probe of a fake `.cr2` extension with garbage bytes should fail
+    /// — but with a Decode-style error, not a panic, exercising the
+    /// new RAW step in the chain.
+    #[test]
+    fn probe_path_falls_through_for_garbage_raw_extension() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("fake.cr2");
+        std::fs::write(&path, b"\x00\x01\x02\x03not a real CR2").unwrap();
+        let r = probe_path(&path);
+        assert!(r.is_err(), "expected probe to fail for garbage CR2");
     }
 }
