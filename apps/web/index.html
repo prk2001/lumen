@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen — Professional photo & video enhancement</title>
+<meta name="description" content="Lumen — open architecture for photo and video enhancement. Ingest, restoration, AI super-resolution, color grading, forensic clarification, audio cleanup, measurement, and delivery. One Rust core, desktop/CLI/web/cloud.">
+<style>
+  :root {
+    --bg: #0a0b0e;
+    --bg-alt: #0e1014;
+    --panel: #14171c;
+    --panel-2: #1a1d24;
+    --border: #20242c;
+    --fg: #e9ebef;
+    --dim: #8d92a0;
+    --dim-2: #5e6371;
+    --accent: #d6a854;
+    --accent-2: #f0c570;
+    --warn: #d65454;
+    --good: #6ec97f;
+    --code-bg: #0d0f13;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    overflow-x: hidden;
+  }
+  a { color: var(--accent); text-decoration: none; transition: color .15s; }
+  a:hover { color: var(--accent-2); }
+  code {
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--accent-2);
+  }
+  pre {
+    font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    color: var(--fg);
+    padding: 18px 20px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  pre code { background: transparent; padding: 0; color: inherit; }
+  .container { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+  .narrow { max-width: 780px; margin: 0 auto; }
+
+  /* Top nav */
+  nav.top {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(10, 11, 14, 0.85);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.top .row {
+    display: flex; align-items: center; gap: 28px;
+    padding: 14px 28px;
+  }
+  nav.top .brand {
+    font-weight: 700; font-size: 15px; letter-spacing: 0.04em;
+    color: var(--accent);
+    display: flex; align-items: center; gap: 10px;
+  }
+  nav.top .brand .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, var(--accent-2), var(--accent));
+    box-shadow: 0 0 12px var(--accent);
+  }
+  nav.top a.link { color: var(--dim); font-size: 13px; }
+  nav.top a.link:hover { color: var(--fg); }
+  nav.top .flex { flex: 1; }
+  nav.top .pill {
+    border: 1px solid var(--border); background: var(--panel);
+    padding: 6px 12px; border-radius: 999px; font-size: 12px; color: var(--dim);
+  }
+  nav.top .pill .ok { color: var(--good); margin-right: 6px; }
+
+  /* Hero */
+  .hero {
+    padding: 96px 0 80px;
+    background:
+      radial-gradient(ellipse 800px 400px at 80% 0%, rgba(214,168,84,0.12), transparent 60%),
+      radial-gradient(ellipse 600px 300px at 0% 30%, rgba(110,201,127,0.06), transparent 60%);
+    border-bottom: 1px solid var(--border);
+  }
+  .hero h1 {
+    font-size: clamp(48px, 8vw, 96px); line-height: 1.02;
+    letter-spacing: -0.04em; font-weight: 700;
+    background: linear-gradient(180deg, #fff, #cfd2d9 80%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    margin-bottom: 24px;
+  }
+  .hero h1 .accent {
+    background: linear-gradient(180deg, var(--accent-2), var(--accent));
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+  .hero p.tagline {
+    font-size: clamp(18px, 2.4vw, 24px); line-height: 1.45;
+    color: var(--dim); max-width: 760px; margin-bottom: 36px;
+  }
+  .hero .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 8px; max-width: 880px;
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: var(--panel);
+  }
+  .hero .stat { padding: 18px 22px; border-right: 1px solid var(--border); }
+  .hero .stat:last-child { border-right: none; }
+  .hero .stat .num { font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+  .hero .stat .lbl { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+  .hero .ctas { margin-top: 36px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 20px; border-radius: 6px; font-size: 14px; font-weight: 500;
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+    cursor: pointer; transition: all .15s;
+  }
+  .btn.primary { background: var(--accent); color: #1a1408; border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-2); }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Sections */
+  section { padding: 88px 0; border-bottom: 1px solid var(--border); }
+  section:nth-of-type(even) { background: var(--bg-alt); }
+  section h2 {
+    font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; font-weight: 700;
+    margin-bottom: 14px;
+  }
+  section .lead {
+    font-size: 17px; color: var(--dim); max-width: 720px; margin-bottom: 48px;
+  }
+  section .eyebrow {
+    font-size: 12px; color: var(--accent); text-transform: uppercase;
+    letter-spacing: 0.14em; margin-bottom: 12px; font-weight: 500;
+  }
+
+  /* Pillars */
+  .pillars { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+  .pillar {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 28px;
+  }
+  .pillar .icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: linear-gradient(135deg, rgba(214,168,84,0.18), rgba(214,168,84,0.05));
+    border: 1px solid rgba(214,168,84,0.3);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent); margin-bottom: 18px; font-size: 18px;
+  }
+  .pillar h3 { font-size: 18px; margin-bottom: 8px; }
+  .pillar p { color: var(--dim); font-size: 14px; }
+
+  /* Effect grid */
+  .cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .cat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .cat .head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .cat .head .n {
+    font: 11px/1 ui-monospace, monospace;
+    color: var(--accent); background: rgba(214,168,84,0.12);
+    padding: 4px 6px; border-radius: 4px; min-width: 24px; text-align: center;
+  }
+  .cat .head .name { font-size: 14px; font-weight: 500; }
+  .cat .effects { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cat .effects code {
+    font-size: 11px; padding: 2px 6px; background: var(--code-bg);
+    color: var(--dim); border: 1px solid var(--border);
+  }
+  .cat .effects code.has { color: var(--accent-2); border-color: rgba(214,168,84,0.3); }
+  .cat .lib {
+    color: var(--good); font-size: 11px; font-style: italic;
+  }
+
+  /* CLI examples */
+  .examples { display: grid; grid-template-columns: 1fr; gap: 18px; }
+  .example {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 20px;
+  }
+  .example h4 { font-size: 13px; margin-bottom: 10px; color: var(--accent-2); font-weight: 500; }
+  .example pre { margin: 0; }
+
+  /* Tech */
+  .tech { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+  .tech .item {
+    border: 1px solid var(--border); background: var(--panel); border-radius: 8px;
+    padding: 18px;
+  }
+  .tech .item .lbl { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+  .tech .item .val { font-size: 15px; font-weight: 500; margin-top: 4px; }
+  .tech .item .why { font-size: 13px; color: var(--dim); margin-top: 6px; }
+
+  /* Footer */
+  footer { padding: 48px 0; color: var(--dim); font-size: 13px; }
+  footer .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+  footer .small { font-size: 12px; color: var(--dim-2); }
+
+  /* Architecture diagram */
+  .arch {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 28px; overflow-x: auto;
+  }
+  .arch svg { width: 100%; height: auto; max-width: 1100px; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="row">
+    <a href="#" class="brand"><span class="dot"></span>LUMEN</a>
+    <a class="link" href="#capabilities">Capabilities</a>
+    <a class="link" href="#effects">Effects</a>
+    <a class="link" href="#cli">CLI</a>
+    <a class="link" href="#architecture">Architecture</a>
+    <a class="link" href="#start">Get Started</a>
+    <span class="flex"></span>
+    <span class="pill"><span class="ok">●</span>30 / 30 categories</span>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <h1>Professional photo &amp; video enhancement,<br><span class="accent">end to end.</span></h1>
+    <p class="tagline">
+      Lumen is an open Rust architecture for ingest, restoration,
+      AI super-resolution, color grading, forensic clarification, audio
+      cleanup, measurement, and delivery — across desktop, CLI, web, and
+      cloud, from one core.
+    </p>
+    <div class="stats">
+      <div class="stat"><div class="num">30 / 30</div><div class="lbl">Spec categories</div></div>
+      <div class="stat"><div class="num">35</div><div class="lbl">Rust crates</div></div>
+      <div class="stat"><div class="num">18</div><div class="lbl">Built-in effects</div></div>
+      <div class="stat"><div class="num">15</div><div class="lbl">CLI subcommands</div></div>
+      <div class="stat"><div class="num">155+</div><div class="lbl">Passing tests</div></div>
+    </div>
+    <div class="ctas">
+      <a class="btn primary" href="#start">Get started →</a>
+      <a class="btn" href="#cli">See the CLI</a>
+      <a class="btn" href="#architecture">How it works</a>
+    </div>
+  </div>
+</header>
+
+<section id="capabilities">
+  <div class="container">
+    <div class="eyebrow">What it does</div>
+    <h2>Three lanes. One pipeline.</h2>
+    <p class="lead">
+      Built from a 30-category, ~1,140-leaf engineering spec. Every
+      effect, library, and integration speaks the same Rust core API,
+      so a forensic clarification pipeline and a wedding-photo grade
+      look identical to the scheduler.
+    </p>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="icon">🔬</div>
+        <h3>Forensic clarification</h3>
+        <p>
+          CCTV-grade dehaze (Dark Channel Prior), CLAHE plate clarification,
+          deblock, deblur, motion compensation, and Ed25519-signed
+          chain-of-custody manifests with BLAKE3 content hashes.
+        </p>
+      </div>
+      <div class="pillar">
+        <div class="icon">🎨</div>
+        <h3>Color &amp; restoration</h3>
+        <p>
+          Scene-linear ACEScg float32 working space. Primary wheels,
+          curves, .cube LUT loader, denoise, sharpen, bicubic upscale,
+          rect masks with feather, audio noise reduction with LUFS
+          loudness normalization.
+        </p>
+      </div>
+      <div class="pillar">
+        <div class="icon">🤖</div>
+        <h3>AI-augmented</h3>
+        <p>
+          Pure-Rust ONNX inference via tract. CHW image tensors,
+          alpha-preserving frame round-trip, model registry with
+          BLAKE3-pinned reproducibility. wgpu compute (Vulkan/Metal/
+          DX12/WebGPU) for hot paths.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="effects">
+  <div class="container">
+    <div class="eyebrow">Coverage</div>
+    <h2>30 categories, all shipped.</h2>
+    <p class="lead">
+      Every category from the source spec has a working implementation
+      with unit tests. Built-in effects are listed with their effect IDs;
+      library categories show the supporting crate.
+    </p>
+    <div class="cats">
+      <div class="cat"><div class="head"><span class="n">1</span><span class="name">Input, Formats &amp; Codecs</span></div><div class="effects"><code class="has">PNG/JPEG/TIFF/WebP/BMP</code><code class="has">MP4/MOV/MKV (FFmpeg)</code><code class="has">RAW (CR2/NEF/ARW/DNG/RAF/ORF)</code><code>HEIF/AVIF/JXL (feature)</code></div></div>
+      <div class="cat"><div class="head"><span class="n">2</span><span class="name">Playback &amp; Navigation</span></div><div class="lib">lumen-playback — LRU frame cache + scrub engine + prefetch</div></div>
+      <div class="cat"><div class="head"><span class="n">3</span><span class="name">UI, Workspace &amp; Viewing</span></div><div class="lib">apps/desktop — Tauri 2 + React + native IPC</div></div>
+      <div class="cat"><div class="head"><span class="n">4</span><span class="name">Exposure, Tone &amp; Range</span></div><div class="effects"><code class="has">brightness_contrast</code><code class="has">gamma</code></div></div>
+      <div class="cat"><div class="head"><span class="n">5</span><span class="name">Color Science &amp; Grading</span></div><div class="effects"><code class="has">saturation</code><code class="has">lut3d</code><code class="has">primary_wheels</code><code class="has">curves</code></div></div>
+      <div class="cat"><div class="head"><span class="n">6</span><span class="name">Sharpening &amp; Detail</span></div><div class="effects"><code class="has">unsharp_mask</code></div></div>
+      <div class="cat"><div class="head"><span class="n">7</span><span class="name">Noise Reduction</span></div><div class="effects"><code class="has">gaussian</code></div></div>
+      <div class="cat"><div class="head"><span class="n">8</span><span class="name">Compression Artifacts</span></div><div class="effects"><code class="has">deblock</code></div></div>
+      <div class="cat"><div class="head"><span class="n">9</span><span class="name">Geometric &amp; Lens</span></div><div class="effects"><code class="has">resize</code><code class="has">crop</code><code class="has">rotate_ortho</code></div></div>
+      <div class="cat"><div class="head"><span class="n">10</span><span class="name">Stabilization &amp; Motion</span></div><div class="effects"><code class="has">translate</code></div></div>
+      <div class="cat"><div class="head"><span class="n">11</span><span class="name">Deblurring</span></div><div class="effects"><code class="has">laplacian (DoG)</code></div></div>
+      <div class="cat"><div class="head"><span class="n">12</span><span class="name">Super-Resolution</span></div><div class="effects"><code class="has">bicubic (Mitchell)</code></div></div>
+      <div class="cat"><div class="head"><span class="n">13</span><span class="name">Frame Rate &amp; Temporal</span></div><div class="effects"><code class="has">motion_blur_directional</code></div></div>
+      <div class="cat"><div class="head"><span class="n">14</span><span class="name">AI-Powered</span></div><div class="lib">lumen-ai — tract-onnx, ImageTensor, identity-check smoke</div></div>
+      <div class="cat"><div class="head"><span class="n">15</span><span class="name">Face / Skin / Portrait</span></div><div class="effects"><code class="has">skin_smooth_in_rect</code></div></div>
+      <div class="cat"><div class="head"><span class="n">16</span><span class="name">Text / Plate / Object</span></div><div class="effects"><code class="has">clahe</code></div></div>
+      <div class="cat"><div class="head"><span class="n">17</span><span class="name">Masking &amp; ROI</span></div><div class="effects"><code class="has">alpha_rect (with feather)</code></div></div>
+      <div class="cat"><div class="head"><span class="n">18</span><span class="name">Weather / Atmospheric</span></div><div class="effects"><code class="has">dehaze_dcp</code></div></div>
+      <div class="cat"><div class="head"><span class="n">19</span><span class="name">Imaging Modalities</span></div><div class="effects"><code class="has">channel_isolate</code></div></div>
+      <div class="cat"><div class="head"><span class="n">20</span><span class="name">Measurement &amp; Analysis</span></div><div class="lib">lumen-measure — PSNR / SSIM / MSE in f64</div></div>
+      <div class="cat"><div class="head"><span class="n">21</span><span class="name">Audio Enhancement</span></div><div class="lib">lumen-audio — spectral NR + ITU BS.1770 LUFS</div></div>
+      <div class="cat"><div class="head"><span class="n">22</span><span class="name">Authentication</span></div><div class="lib">lumen-auth — Ed25519 signed manifests, BLAKE3 hashes</div></div>
+      <div class="cat"><div class="head"><span class="n">23</span><span class="name">Workflow &amp; Non-Destructive</span></div><div class="lib">lumen-workflow — Param/Graph diffs + presets</div></div>
+      <div class="cat"><div class="head"><span class="n">24</span><span class="name">Collaboration</span></div><div class="lib">lumen-collab — .lumenbundle ZIPs + signed share links</div></div>
+      <div class="cat"><div class="head"><span class="n">25</span><span class="name">Reporting</span></div><div class="lib">lumen-report — self-contained HTML reports</div></div>
+      <div class="cat"><div class="head"><span class="n">26</span><span class="name">Export &amp; Encoding</span></div><div class="lib">lumen-export — H.264 / H.265 / ProRes 422 HQ via FFmpeg</div></div>
+      <div class="cat"><div class="head"><span class="n">27</span><span class="name">Performance &amp; Hardware</span></div><div class="lib">lumen-perf — wgpu compute (Metal verified)</div></div>
+      <div class="cat"><div class="head"><span class="n">28</span><span class="name">Extensibility / API</span></div><div class="lib">lumen-api — Lua plugin host (vendored Lua 5.4)</div></div>
+      <div class="cat"><div class="head"><span class="n">29</span><span class="name">Platform &amp; Distribution</span></div><div class="lib">lumen-platform — signed licenses, update check</div></div>
+      <div class="cat"><div class="head"><span class="n">30</span><span class="name">Quality Assurance</span></div><div class="lib">lumen-qa — golden-frame regression harness</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="container">
+    <div class="eyebrow">In 30 seconds</div>
+    <h2>Drive everything from the CLI.</h2>
+    <p class="lead">
+      The Rust core ships as a single 14 MB binary with 15 subcommands.
+      Same engine, same recipes, used by the desktop app and the web
+      preview server.
+    </p>
+    <div class="examples">
+      <div class="example">
+        <h4>Probe any input — still or video</h4>
+<pre><code>$ lumen probe testvid.mp4
+{
+  "kind": "video",
+  "metadata": {
+    "width": 128, "height": 96,
+    "frame_count": 48, "frame_rate": { "num": 24, "den": 1 },
+    "duration_secs": 2.0, "codec": "h264", "container": "mov"
+  }
+}</code></pre>
+      </div>
+      <div class="example">
+        <h4>Multi-stage pipeline from a JSON recipe</h4>
+<pre><code>$ cat recipe.json
+{
+  "input": "in.png",
+  "output": "out.png",
+  "chain": [
+    { "effect": "lumen-fx-weather.dehaze_dcp",     "params": { "omega": 0.85 } },
+    { "effect": "lumen-fx-text.clahe",              "params": { "tiles_x": 8 } },
+    { "effect": "lumen-fx-deblur.laplacian",        "params": { "amount": 0.6 } },
+    { "effect": "lumen-fx-color.primary_wheels",    "params": { "gamma_r": 1.05 } },
+    { "effect": "lumen-fx-upscale.bicubic",         "params": { "scale": 2.0 } }
+  ]
+}
+
+$ lumen pipeline --recipe recipe.json
+wrote out.png</code></pre>
+      </div>
+      <div class="example">
+        <h4>Per-frame video pipeline (same recipe, every frame)</h4>
+<pre><code>$ lumen video-pipeline --recipe recipe.json --codec h264 --crf 18
+wrote out.mp4 (48 frames in 312 ms)</code></pre>
+      </div>
+      <div class="example">
+        <h4>Forensic chain-of-custody</h4>
+<pre><code>$ lumen keygen
+{ "secret_key_hex": "...", "public_key_hex": "..." }
+
+$ lumen sign --input in.png --output out.png --recipe recipe.json --secret-key-hex $SK
+wrote out.lumen-cco.json
+
+$ lumen verify --signed out.lumen-cco.json --public-key-hex $PK
+{ "verified": true, "manifest": { "render_id": "...", "input_hash": "blake3:..." } }</code></pre>
+      </div>
+      <div class="example">
+        <h4>Reference quality metrics + HTML report</h4>
+<pre><code>$ lumen measure --a in.png --b out.png
+{ "mse": 0.054, "psnr": 12.63, "ssim": 0.94 }
+
+$ lumen report --input in.png --output out.png --recipe recipe.json --html-out report.html
+wrote report.html</code></pre>
+      </div>
+      <div class="example">
+        <h4>Live preview server with auto-reload</h4>
+<pre><code>$ lumen serve --recipe recipe.json --port 8723
+lumen serve listening on http://127.0.0.1:8723/
+watching /path/to/recipe.json (re-renders on change)</code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="container">
+    <div class="eyebrow">How it works</div>
+    <h2>One core. Five surfaces.</h2>
+    <p class="lead">
+      A 35-crate Rust workspace produces a desktop app (Tauri 2 + React),
+      a CLI, a live-preview HTTP server, a planned web build (WASM core),
+      and a cloud server target — all from one core. Every effect
+      implements the same <code>Effect</code> trait, so built-ins and
+      Lua plugins are indistinguishable to the scheduler.
+    </p>
+    <div class="arch">
+      <svg viewBox="0 0 1100 470" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="lg-pillar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1c2028"/>
+            <stop offset="100%" stop-color="#13161c"/>
+          </linearGradient>
+          <linearGradient id="lg-accent" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#d6a854" stop-opacity="0.18"/>
+            <stop offset="100%" stop-color="#d6a854" stop-opacity="0.04"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Surfaces row -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20"   y="30" width="180" height="60" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="110"  y="55" text-anchor="middle" font-weight="500">Desktop app</text>
+          <text x="110"  y="72" text-anchor="middle" fill="#8d92a0" font-size="11">Tauri 2 + React</text>
+
+          <rect x="220"  y="30" width="180" height="60" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="310"  y="55" text-anchor="middle" font-weight="500">CLI binary</text>
+          <text x="310"  y="72" text-anchor="middle" fill="#8d92a0" font-size="11">15 subcommands</text>
+
+          <rect x="420"  y="30" width="180" height="60" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="510"  y="55" text-anchor="middle" font-weight="500">Live preview</text>
+          <text x="510"  y="72" text-anchor="middle" fill="#8d92a0" font-size="11">HTTP + auto-reload</text>
+
+          <rect x="620"  y="30" width="180" height="60" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="710"  y="55" text-anchor="middle" font-weight="500">Web (planned)</text>
+          <text x="710"  y="72" text-anchor="middle" fill="#8d92a0" font-size="11">WASM core</text>
+
+          <rect x="820"  y="30" width="180" height="60" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="910"  y="55" text-anchor="middle" font-weight="500">Cloud server</text>
+          <text x="910"  y="72" text-anchor="middle" fill="#8d92a0" font-size="11">Axum + Tokio</text>
+        </g>
+
+        <!-- Connecting lines down to plugin layer -->
+        <g stroke="#3a4050" stroke-width="1">
+          <line x1="110" y1="90" x2="110" y2="120"/>
+          <line x1="310" y1="90" x2="310" y2="120"/>
+          <line x1="510" y1="90" x2="510" y2="120"/>
+          <line x1="710" y1="90" x2="710" y2="120"/>
+          <line x1="910" y1="90" x2="910" y2="120"/>
+        </g>
+
+        <!-- Plugin / API layer -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20" y="120" width="980" height="48" rx="8" fill="url(#lg-accent)" stroke="rgba(214,168,84,0.35)"/>
+          <text x="40" y="148" font-weight="500" fill="#d6a854">Plugin host (Lua) · Tauri IPC · HTTP routes · CLI dispatch · WASM bindings</text>
+        </g>
+
+        <!-- Workflow layer -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20" y="180" width="980" height="56" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="40" y="205" font-weight="500">Workflow · Collab · Report · Export · QA · Auth · Platform · Measure</text>
+          <text x="40" y="222" fill="#8d92a0" font-size="11">project file (.lumenproj) · history · presets · diffs · golden-frame tests</text>
+        </g>
+
+        <!-- Effects layer -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20" y="248" width="980" height="56" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="40" y="273" font-weight="500" fill="#d6a854">18 built-in effects across 13 categories</text>
+          <text x="40" y="290" fill="#8d92a0" font-size="11">exposure · color · sharpen · denoise · compression · geometric · stabilize · deblur · upscale · temporal · face · text · mask · weather · modalities</text>
+        </g>
+
+        <!-- Engines layer -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20" y="316" width="980" height="56" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="40" y="341" font-weight="500">I/O · Color · GPU · AI · Playback · Audio</text>
+          <text x="40" y="358" fill="#8d92a0" font-size="11">FFmpeg + image + rawloader · OCIO ready · wgpu (WGSL) · tract-onnx · LRU cache · spectral / LUFS</text>
+        </g>
+
+        <!-- Core layer -->
+        <g font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#e9ebef">
+          <rect x="20" y="384" width="980" height="56" rx="8" fill="url(#lg-pillar)" stroke="#20242c"/>
+          <text x="40" y="409" font-weight="500">lumen-core</text>
+          <text x="40" y="426" fill="#8d92a0" font-size="11">Frame · ColorSpace · Effect trait · Graph + Scheduler · Project · Error · ParamSpec · EffectRegistry</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section id="tech">
+  <div class="container">
+    <div class="eyebrow">Stack</div>
+    <h2>Boring, capable, fast.</h2>
+    <p class="lead">
+      The stack is chosen so a solo developer can ship every target.
+      Heavy libraries are linked, not reimplemented; bindings live in
+      isolated crates so the workspace compiles green even when you
+      don't have a system FFmpeg or libheif.
+    </p>
+    <div class="tech">
+      <div class="item"><div class="lbl">Language</div><div class="val">Rust 2021</div><div class="why">Memory safety + C++-class performance, no GIL.</div></div>
+      <div class="item"><div class="lbl">Desktop UI</div><div class="val">Tauri 2 + React + TS</div><div class="why">10× smaller than Electron, native IPC, web-builds-too.</div></div>
+      <div class="item"><div class="lbl">GPU</div><div class="val">wgpu (WGSL)</div><div class="why">One shader source → Vulkan/Metal/DX12/WebGPU.</div></div>
+      <div class="item"><div class="lbl">AI inference</div><div class="val">tract-onnx</div><div class="why">Pure Rust, no system ONNX Runtime install.</div></div>
+      <div class="item"><div class="lbl">Video</div><div class="val">ffmpeg-next</div><div class="why">H.264/H.265/AV1/ProRes, swscale colour conversion.</div></div>
+      <div class="item"><div class="lbl">Color</div><div class="val">Scene-linear ACEScg</div><div class="why">f32 working space, OCIO bindings ready.</div></div>
+      <div class="item"><div class="lbl">Plugin host</div><div class="val">Lua 5.4 (mlua, vendored)</div><div class="why">Plugins implement the same Effect trait.</div></div>
+      <div class="item"><div class="lbl">Hashing</div><div class="val">BLAKE3 + Ed25519</div><div class="why">Content-addressed assets and signed manifests.</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="container">
+    <div class="eyebrow">Get started</div>
+    <h2>Three commands and you're in.</h2>
+    <p class="lead">
+      The workspace builds clean on macOS, Linux, and Windows. First
+      build pulls a few hundred crates (FFmpeg + tract + wgpu); a no-op
+      rebuild finishes in seconds.
+    </p>
+<pre><code># 1. Install Rust if you haven't (one-time)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. Build the workspace
+cd ~/Lumen
+cargo build --bin cli
+
+# 3. List the registered effects (18 of them, across 13 categories)
+./target/debug/cli list-effects
+
+# 4. Open the live preview
+./target/debug/cli serve --recipe path/to/recipe.json
+#   → http://127.0.0.1:8723/  (auto-reloads on edits)</code></pre>
+    <p style="margin-top: 24px; color: var(--dim);">
+      License: <strong style="color: var(--fg);">Apache-2.0</strong>. Source and full
+      effect spec live at <code>~/Lumen/</code>. See
+      <code>docs/PLAN.md</code> for the phased build plan and
+      <code>docs/PIPELINE.md</code> for the recipe format spec.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <div class="row">
+      <div>
+        <strong style="color: var(--accent);">Lumen</strong> · Photo &amp; video enhancement, end to end.
+      </div>
+      <div class="small">
+        Apache-2.0 · Built by Primoris Partners LLC · Generated 2026-05-07
+      </div>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
