@@ -28,6 +28,7 @@ pub fn render_html_report(case_dir: &Path, output_filename: &str) -> Result<Path
     // Audit must be valid before we hand the reviewer a friendly UI.
     let entries = case::verify_audit_log(case_dir)?;
     let metadata = case::load_metadata(case_dir)?;
+    let signoff = case::signoff_status(case_dir, &metadata)?;
 
     // Collect inline images. Each tile is (label, mime, data-uri-payload).
     let mut tiles: Vec<Tile> = Vec::new();
@@ -83,7 +84,7 @@ pub fn render_html_report(case_dir: &Path, output_filename: &str) -> Result<Path
         recipes.push((name, body));
     }
 
-    let html = build_html(&metadata, &entries, &tiles, &recipes);
+    let html = build_html(&metadata, &entries, &tiles, &recipes, &signoff);
 
     let reports_dir = case_dir.join("reports");
     std::fs::create_dir_all(&reports_dir)?;
@@ -148,6 +149,7 @@ fn build_html(
     entries: &[AuditEntry],
     tiles: &[Tile],
     recipes: &[(String, String)],
+    signoff: &case::SignoffStatus,
 ) -> String {
     let title = format!(
         "Lumen case report · {} ({})",
@@ -177,6 +179,32 @@ fn build_html(
         body.push_str(&html_escape(h));
         body.push_str("</code></p>");
     }
+    // Sign-off banner: green if independently approved, amber if any
+    // self-only approvals, gray if untouched.
+    let (banner_class, banner_text) = if signoff.has_independent_approval {
+        (
+            "signoff-ok",
+            format!(
+                "Independently approved — {} reviewer signature(s)",
+                signoff.independent_reviewers.len()
+            ),
+        )
+    } else if signoff.signoff_count > 0 {
+        (
+            "signoff-warn",
+            format!(
+                "{} self-signoff(s) only — no independent reviewer has approved",
+                signoff.approvals
+            ),
+        )
+    } else {
+        ("signoff-none", "No sign-offs yet".to_string())
+    };
+    body.push_str("<div class=\"signoff ");
+    body.push_str(banner_class);
+    body.push_str("\">");
+    body.push_str(&html_escape(&banner_text));
+    body.push_str("</div>");
     body.push_str("</header>");
 
     // Audit timeline.
@@ -303,6 +331,11 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12px;
       background: #f1f1f1; padding: 8px; border-radius: 4px; }
 footer { color: #777; font-size: 13px; margin-top: 40px; border-top: 1px solid #ddd;
          padding-top: 14px; }
+.signoff { display: inline-block; padding: 6px 12px; border-radius: 4px;
+           font-weight: 600; margin: 8px 0; font-size: 14px; }
+.signoff-ok { background: #d6efdd; color: #1d603a; }
+.signoff-warn { background: #f6e3b1; color: #6b4c0a; }
+.signoff-none { background: #e6e6e6; color: #555; }
 @media (prefers-color-scheme: dark) {
   body { background: #161616; color: #e8e8e8; }
   .meta, .at, .sig, figcaption, footer { color: #aaa; }

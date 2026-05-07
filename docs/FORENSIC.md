@@ -146,7 +146,41 @@ checks AND the chain is unbroken (every entry's
 If anyone tampered with any past entry, every entry from that point
 forward fails verification.
 
-### 5. Render a human-readable HTML report
+### 5. Reviewer sign-off (analyst-vs-reviewer separation)
+
+In a real lab, the analyst who processed the evidence is not allowed
+to be the only signature on the case. A second operator (the reviewer)
+must independently look at the chain and sign off. Lumen enforces this
+with a separate operator identity:
+
+```bash
+# Reviewer switches to their own operator file:
+export LUMEN_OPERATOR=~/.lumen/operator-reviewer.json
+lumen operator init --name "Det. B. Reviewer" \
+    --agency "Primoris Forensic Lab" --identifier "REV-7"
+
+# Cross-checks the case, then signs off:
+lumen case audit --dir ./case-2026-CCTV-LOTB --strict
+lumen case sign-off --dir ./case-2026-CCTV-LOTB \
+    --decision approve \
+    --note "Cross-checked stages 04 vs 06; no fabricated detail."
+```
+
+`lumen case sign-off --decision reject` is the rejection path; the
+note explains why.
+
+To gate further actions on having an independent approval:
+
+```bash
+lumen case audit --dir ./case-2026-CCTV-LOTB --strict --require-signoff
+```
+
+This exits non-zero unless at least one `sign-off` entry with
+decision == approve was signed by a pubkey **different** from the
+analyst's. The analyst's own sign-off doesn't count — that's the
+whole point.
+
+### 6. Render a human-readable HTML report
 
 For reviewers who don't want to run the CLI:
 
@@ -165,7 +199,7 @@ The HTML is a *presentation* layer; the audit log + `--strict` audit
 remain the cryptographic source of truth. To re-verify after reading
 the report, run `lumen case audit --strict --dir .` again.
 
-### 6. Export a tamper-evident package
+### 7. Export a tamper-evident package
 
 ```bash
 lumen case export \
@@ -254,8 +288,6 @@ environments by simply not running it.
 
 ## What's still on the roadmap
 
-- `lumen case sign-off --reviewer <key>` — separate reviewer
-  signature gate for multi-operator approval.
 - C2PA-compatible export — the audit log is conceptually similar
   to a C2PA manifest; an adapter would let Lumen output land
   natively in C2PA-aware viewers.

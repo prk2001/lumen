@@ -279,6 +279,55 @@ pub fn verify_audit_log(case_dir: &Path) -> Result<Vec<AuditEntry>> {
     Ok(entries)
 }
 
+/// Sign-off summary: who has reviewed the case and what they decided.
+/// `has_independent_approval` is true iff at least one `sign-off`
+/// entry with decision == approve was signed by a pubkey *different*
+/// from the operator who opened the case (the analyst). This is the
+/// analyst-vs-reviewer separation that real forensic labs require —
+/// you cannot self-approve.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SignoffStatus {
+    pub signoff_count: usize,
+    pub approvals: usize,
+    pub rejections: usize,
+    pub has_independent_approval: bool,
+    pub independent_reviewers: Vec<String>, // pubkey hex
+}
+
+pub fn signoff_status(case_dir: &Path, metadata: &CaseMetadata) -> Result<SignoffStatus> {
+    let entries = read_audit_log(case_dir)?;
+    let analyst_pk = &metadata.created_by.public_key_hex;
+    let mut count = 0;
+    let mut approvals = 0;
+    let mut rejections = 0;
+    let mut independent: std::collections::BTreeSet<String> = Default::default();
+    for e in entries {
+        if e.action != "sign-off" {
+            continue;
+        }
+        count += 1;
+        let lower = e.note.to_lowercase();
+        let approved = lower.contains("decision: approve");
+        let rejected = lower.contains("decision: reject");
+        if approved {
+            approvals += 1;
+        }
+        if rejected {
+            rejections += 1;
+        }
+        if approved && &e.operator_public_key_hex != analyst_pk {
+            independent.insert(e.operator_public_key_hex.clone());
+        }
+    }
+    Ok(SignoffStatus {
+        signoff_count: count,
+        approvals,
+        rejections,
+        has_independent_approval: !independent.is_empty(),
+        independent_reviewers: independent.into_iter().collect(),
+    })
+}
+
 /// Per-artifact strict-audit result. Every entry that referenced a
 /// hash gets one row per hash; the row records the location searched
 /// and whether a matching file was found.
@@ -602,6 +651,77 @@ mod tests {
             assert!(!report.artifacts[0].ok);
             assert_eq!(report.artifacts[0].matched_path, None);
         });
+    }
+
+    #[test]
+    fn signoff_separates_analyst_from_reviewer() {
+        // Acquire the LUMEN_OPERATOR mutex inline — we swap operator
+        // identities mid-test, so we can't use the with_test_operator
+        // helper.
+        let _guard = SERIALIZER.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = fresh_dir();
+
+        // Analyst opens the case.
+        let analyst_op_path = dir.join("analyst.json");
+        std::env::set_var("LUMEN_OPERATOR", &analyst_op_path);
+        operator::init("Det. Analyst", "Lab", "ANL-1", false).unwrap();
+        let analyst_pk = operator::current_identity()
+            .unwrap()
+            .public_key_hex;
+        let metadata = init(
+            &dir, "C-SO-1", "EVD-SO-1", "Sign-off Test", "Lab", None,
+        )
+        .unwrap();
+
+        // Self-signoff (analyst signs their own case).
+        append_entry(
+            &dir,
+            AuditEntryDraft {
+                action: "sign-off".into(),
+                note: "decision: approve - looks fine to me".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let s = signoff_status(&dir, &metadata).unwrap();
+        assert_eq!(s.signoff_count, 1);
+        assert_eq!(s.approvals, 1);
+        assert!(
+            !s.has_independent_approval,
+            "self-signoff must NOT count as independent approval"
+        );
+
+        // Switch to reviewer identity, sign-off again.
+        let reviewer_op_path = dir.join("reviewer.json");
+        std::env::set_var("LUMEN_OPERATOR", &reviewer_op_path);
+        operator::init("Det. Reviewer", "Lab", "REV-1", false).unwrap();
+        let reviewer_pk = operator::current_identity()
+            .unwrap()
+            .public_key_hex;
+        assert_ne!(analyst_pk, reviewer_pk);
+        append_entry(
+            &dir,
+            AuditEntryDraft {
+                action: "sign-off".into(),
+                note: "decision: approve - chain of custody verified".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let s = signoff_status(&dir, &metadata).unwrap();
+        assert_eq!(s.signoff_count, 2);
+        assert_eq!(s.approvals, 2);
+        assert!(
+            s.has_independent_approval,
+            "reviewer's signoff must count as independent approval"
+        );
+        assert_eq!(s.independent_reviewers, vec![reviewer_pk]);
+
+        // Chain still verifies (sign-off entries are normal entries).
+        let verified = verify_audit_log(&dir).unwrap();
+        assert_eq!(verified.len(), 3); // case-init + 2 sign-offs
+
+        std::env::remove_var("LUMEN_OPERATOR");
     }
 
     #[test]

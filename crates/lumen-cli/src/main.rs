@@ -107,6 +107,23 @@ enum CaseCommand {
         /// Re-hash every referenced artifact and verify it still
         /// matches the hash recorded in the audit log.
         #[arg(long, default_value_t = false)] strict: bool,
+        /// Require at least one `sign-off` entry signed by a pubkey
+        /// different from the operator who opened the case
+        /// (analyst-vs-reviewer separation). Exits non-zero if no
+        /// such sign-off exists.
+        #[arg(long, default_value_t = false)] require_signoff: bool,
+    },
+    /// Append a reviewer's sign-off to the audit log. The reviewer
+    /// must be running under a different operator identity (different
+    /// `~/.lumen/operator.json` or `LUMEN_OPERATOR=...`) than the
+    /// analyst who opened the case — `lumen case audit --require-signoff`
+    /// rejects same-operator sign-offs to prevent self-approval.
+    SignOff {
+        #[arg(long)] dir: PathBuf,
+        /// `approve` or `reject`. Recorded verbatim in the entry note.
+        #[arg(long)] decision: String,
+        /// Reviewer's free-form note explaining the decision.
+        #[arg(long, default_value = "")] note: String,
     },
     /// Export the case folder as a tamper-evident zip.
     Export {
@@ -465,7 +482,12 @@ fn run(cli: Cli) -> Result<()> {
                 cmd_case_render(&dir, &recipe, &input, &output, &note)
             }
             CaseCommand::Note { dir, note } => cmd_case_note(&dir, &note),
-            CaseCommand::Audit { dir, strict } => cmd_case_audit(&dir, strict),
+            CaseCommand::Audit { dir, strict, require_signoff } => {
+                cmd_case_audit(&dir, strict, require_signoff)
+            }
+            CaseCommand::SignOff { dir, decision, note } => {
+                cmd_case_signoff(&dir, &decision, &note)
+            }
             CaseCommand::Export { dir, output } => cmd_case_export(&dir, &output),
             CaseCommand::Report { dir, output } => cmd_case_report(&dir, &output),
         },
@@ -596,8 +618,47 @@ fn cmd_case_note(dir: &std::path::Path, note: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_case_audit(dir: &std::path::Path, strict: bool) -> Result<()> {
+fn cmd_case_signoff(dir: &std::path::Path, decision: &str, note: &str) -> Result<()> {
+    let decision_norm = decision.to_lowercase();
+    if !matches!(decision_norm.as_str(), "approve" | "reject") {
+        return Err(anyhow!(
+            "decision must be 'approve' or 'reject', got '{}'",
+            decision
+        ));
+    }
+    // Self-signoff sanity check: warn if the current operator pubkey
+    // matches the operator who opened the case. The audit step's
+    // --require-signoff also enforces this, but a CLI-time warning
+    // helps catch accidents earlier.
+    if let (Ok(metadata), Ok(op)) = (case::load_metadata(dir), operator::current_identity()) {
+        if op.public_key_hex == metadata.created_by.public_key_hex {
+            eprintln!(
+                "warning: signing off as the same operator who opened the case. \
+                 For analyst-vs-reviewer separation, run sign-off under a different \
+                 LUMEN_OPERATOR identity."
+            );
+        }
+    }
+    let formatted_note = if note.is_empty() {
+        format!("decision: {}", decision_norm)
+    } else {
+        format!("decision: {} — {}", decision_norm, note)
+    };
+    let entry = case::append_entry(
+        dir,
+        case::AuditEntryDraft {
+            action: "sign-off".into(),
+            note: formatted_note,
+            ..Default::default()
+        },
+    )?;
+    println!("{}", serde_json::to_string_pretty(&entry)?);
+    Ok(())
+}
+
+fn cmd_case_audit(dir: &std::path::Path, strict: bool, require_signoff: bool) -> Result<()> {
     let m = case::load_metadata(dir)?;
+    let signoff_status = case::signoff_status(dir, &m)?;
     if strict {
         let report = case::verify_audit_log_strict(dir)?;
         let any_missing = report.artifacts.iter().any(|a| !a.ok);
@@ -607,6 +668,7 @@ fn cmd_case_audit(dir: &std::path::Path, strict: bool) -> Result<()> {
                 "case": m,
                 "audit_chain_verified": true,
                 "all_artifacts_match": report.all_artifacts_match,
+                "signoff": signoff_status,
                 "entry_count": report.entries.len(),
                 "artifact_count": report.artifacts.len(),
                 "artifacts": report.artifacts,
@@ -626,10 +688,19 @@ fn cmd_case_audit(dir: &std::path::Path, strict: bool) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "case": m,
                 "audit_chain_verified": true,
+                "signoff": signoff_status,
                 "entry_count": entries.len(),
                 "entries": entries,
             }))?
         );
+    }
+    if require_signoff && !signoff_status.has_independent_approval {
+        return Err(anyhow!(
+            "audit requires sign-off, but no independent reviewer has approved \
+             this case (analyst's own pubkey doesn't count). Run \
+             `lumen case sign-off --decision approve --dir <case>` under a \
+             different operator identity."
+        ));
     }
     Ok(())
 }
