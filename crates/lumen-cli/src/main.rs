@@ -12,6 +12,7 @@
 
 mod auto;
 mod clarify;
+mod presets;
 mod serve;
 mod smart;
 mod video_pipeline;
@@ -184,6 +185,16 @@ enum Command {
         /// of running it.
         #[arg(long)] print_recipe: bool,
     },
+    /// Apply a stylistic preset chain (no input analysis).
+    ///
+    /// Available: pop, bw, vintage, sharpen, restore.
+    Style {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// Preset name (pop / bw / vintage / sharpen / restore).
+        #[arg(long)] name: String,
+        #[arg(long)] print_recipe: bool,
+    },
     /// Smart Auto — analyze the input and pick auto-enhance OR
     /// clarify automatically. The one-button entry point.
     Smart {
@@ -268,7 +279,30 @@ fn run(cli: Cli) -> Result<()> {
         Command::Smart { input, output, upscale, print_recipe } => {
             cmd_smart(&input, &output, upscale, print_recipe)
         }
+        Command::Style { input, output, name, print_recipe } => {
+            cmd_style(&input, &output, &name, print_recipe)
+        }
     }
+}
+
+fn cmd_style(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    name: &str,
+    print_recipe: bool,
+) -> Result<()> {
+    let recipe = presets::build_style_recipe(input, output, name)?;
+    if print_recipe {
+        println!("{}", serde_json::to_string_pretty(&recipe)?);
+        return Ok(());
+    }
+    eprintln!("style preset '{}' ({} steps):", name, recipe.chain.len());
+    for s in &recipe.chain {
+        eprintln!("  {} {}", s.effect, s.params);
+    }
+    run_chain_in_memory(&recipe)?;
+    println!("wrote {}", output.display());
+    Ok(())
 }
 
 fn cmd_smart(

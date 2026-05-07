@@ -1,8 +1,28 @@
 # Lumen
 
-🌐 **Live site:** [https://prk2001.github.io/lumen/](https://prk2001.github.io/lumen/) · **Repo:** [github.com/prk2001/lumen](https://github.com/prk2001/lumen)
+🌐 **Live site:** [https://prk2001.github.io/lumen/](https://prk2001.github.io/lumen/) · **Try the live demo:** [/#demo](https://prk2001.github.io/lumen/#demo) · **Repo:** [github.com/prk2001/lumen](https://github.com/prk2001/lumen)
 
 > **Professional-grade photo and video enhancement, end to end.**
+
+## TL;DR — drop in a blurry photo, click one button, done.
+
+The live site at [`/#demo`](https://prk2001.github.io/lumen/#demo) runs
+five real Lumen effects in your browser against any image you upload.
+There's a one-click **✦ Smart Auto** button that analyzes the input
+and decides whether it's a normal photo (→ Auto-Enhance) or a degraded
+CCTV grab (→ Clarify, the 7-step forensic chain). Side-by-side
+**A/B compare slider** so you can drag a divider and see exactly what
+changed.
+
+Same algorithm, byte-for-byte, ships in the CLI:
+
+```bash
+lumen smart        --input X.jpg --output Y.png   # one-click
+lumen auto-enhance --input X.jpg --output Y.png   # general photo
+lumen clarify      --input X.jpg --output Y.png \
+                   --strength aggressive --upscale # CCTV/blurry
+lumen style        --input X.jpg --output Y.png --name pop|bw|vintage|sharpen|restore
+```
 
 Lumen is an open architecture for image and video enhancement that spans
 **ingest, restoration, AI super-resolution, color grading, forensic
