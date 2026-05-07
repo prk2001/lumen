@@ -12,8 +12,10 @@
 
 mod auto;
 mod batch;
+mod case;
 mod clarify;
 mod colorize;
+mod operator;
 mod presets;
 mod project;
 mod serve;
@@ -48,6 +50,60 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum OperatorCommand {
+    /// Mint a new Ed25519 keypair + identity at ~/.lumen/operator.json.
+    Init {
+        #[arg(long)] name: String,
+        #[arg(long)] agency: String,
+        #[arg(long, default_value = "")] identifier: String,
+        #[arg(long, default_value_t = false)] force: bool,
+    },
+    /// Print the local operator identity (public key + metadata).
+    Show,
+}
+
+#[derive(Subcommand, Debug)]
+enum CaseCommand {
+    /// Open a new case folder. Records the original input's BLAKE3
+    /// hash and writes the first audit entry (case-init).
+    Init {
+        /// Path of the case folder to create.
+        #[arg(long)] dir: PathBuf,
+        #[arg(long)] case_id: String,
+        #[arg(long)] evidence_id: String,
+        #[arg(long)] case_name: String,
+        #[arg(long)] agency: String,
+        /// Optional original input file. Copied into <dir>/inputs/
+        /// and its hash is recorded in case.json.
+        #[arg(long)] input: Option<PathBuf>,
+    },
+    /// Run a recipe within a case — auto-records every artifact and
+    /// appends a signed `render` entry to the audit log.
+    Render {
+        #[arg(long)] dir: PathBuf,
+        #[arg(long)] recipe: PathBuf,
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// Note attached to the audit entry (e.g. "applied clarify aggressive").
+        #[arg(long, default_value = "")] note: String,
+    },
+    /// Append a free-form note to the audit log (e.g. reviewer comments).
+    Note {
+        #[arg(long)] dir: PathBuf,
+        #[arg(long)] note: String,
+    },
+    /// Verify the audit log: every signature valid, chain unbroken.
+    Audit {
+        #[arg(long)] dir: PathBuf,
+    },
+    /// Export the case folder as a tamper-evident zip.
+    Export {
+        #[arg(long)] dir: PathBuf,
+        #[arg(long)] output: PathBuf,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -211,6 +267,16 @@ enum Command {
         /// of running it.
         #[arg(long)] print_recipe: bool,
     },
+    /// Forensic operator identity (`~/.lumen/operator.json`).
+    Operator {
+        #[command(subcommand)]
+        sub: OperatorCommand,
+    },
+    /// Forensic case management — case folder + signed audit log.
+    Case {
+        #[command(subcommand)]
+        sub: CaseCommand,
+    },
     /// Combine multiple photos of the same scene into one.
     ///
     /// All inputs must have identical dimensions. Phase 1 stacking is
@@ -365,6 +431,23 @@ fn run(cli: Cli) -> Result<()> {
         Command::Stack { inputs, output, mode } => {
             stack::cmd_stack(&inputs, &output, &mode)
         }
+        Command::Operator { sub } => match sub {
+            OperatorCommand::Init { name, agency, identifier, force } => {
+                cmd_operator_init(&name, &agency, &identifier, force)
+            }
+            OperatorCommand::Show => cmd_operator_show(),
+        },
+        Command::Case { sub } => match sub {
+            CaseCommand::Init { dir, case_id, evidence_id, case_name, agency, input } => {
+                cmd_case_init(&dir, &case_id, &evidence_id, &case_name, &agency, input.as_deref())
+            }
+            CaseCommand::Render { dir, recipe, input, output, note } => {
+                cmd_case_render(&dir, &recipe, &input, &output, &note)
+            }
+            CaseCommand::Note { dir, note } => cmd_case_note(&dir, &note),
+            CaseCommand::Audit { dir } => cmd_case_audit(&dir),
+            CaseCommand::Export { dir, output } => cmd_case_export(&dir, &output),
+        },
         Command::Project { sub } => match sub {
             ProjectCommand::Show { path } => project::cmd_project_show(&path),
             ProjectCommand::Run { project: p, output, jpeg_quality } => {
@@ -372,6 +455,149 @@ fn run(cli: Cli) -> Result<()> {
             }
         },
     }
+}
+
+// ─── Operator + case (forensic) dispatchers ──────────────────────────────
+
+fn cmd_operator_init(
+    name: &str,
+    agency: &str,
+    identifier: &str,
+    force: bool,
+) -> Result<()> {
+    let id = operator::init(name, agency, identifier, force)?;
+    println!("{}", serde_json::to_string_pretty(&id)?);
+    eprintln!(
+        "operator file written to {}",
+        operator::operator_path().display()
+    );
+    Ok(())
+}
+
+fn cmd_operator_show() -> Result<()> {
+    let id = operator::current_identity()
+        .context("no operator. Run `lumen operator init --name … --agency …` first.")?;
+    println!("{}", serde_json::to_string_pretty(&id)?);
+    Ok(())
+}
+
+fn cmd_case_init(
+    dir: &std::path::Path,
+    case_id: &str,
+    evidence_id: &str,
+    case_name: &str,
+    agency: &str,
+    input: Option<&std::path::Path>,
+) -> Result<()> {
+    let m = case::init(dir, case_id, evidence_id, case_name, agency, input)?;
+    println!("{}", serde_json::to_string_pretty(&m)?);
+    eprintln!("case opened at {}", dir.display());
+    Ok(())
+}
+
+fn cmd_case_render(
+    dir: &std::path::Path,
+    recipe_path: &std::path::Path,
+    input: &std::path::Path,
+    output: &std::path::Path,
+    note: &str,
+) -> Result<()> {
+    // Verify the case is well-formed before adding to it.
+    let _meta = case::load_metadata(dir)?;
+    case::verify_audit_log(dir)
+        .map_err(|e| anyhow!("audit log was already broken before this render: {e}"))?;
+
+    // Stage the recipe + input into the case so they're permanently captured.
+    let recipe_dst = dir.join("recipes").join(
+        recipe_path.file_name().ok_or_else(|| anyhow!("recipe has no filename"))?,
+    );
+    std::fs::copy(recipe_path, &recipe_dst)?;
+    let input_dst = dir.join("inputs").join(
+        input.file_name().ok_or_else(|| anyhow!("input has no filename"))?,
+    );
+    if input_dst != input.to_path_buf() {
+        std::fs::copy(input, &input_dst)?;
+    }
+    let recipe_hash = lumen_io::hash_file(&recipe_dst).ok();
+    let input_hash = lumen_io::hash_file(&input_dst).ok();
+
+    // Read recipe, override input/output to live inside the case folder.
+    let recipe_str = std::fs::read_to_string(&recipe_dst)?;
+    let mut recipe: Recipe = serde_json::from_str(&recipe_str)?;
+    let output_dst = dir.join("outputs").join(
+        output.file_name().ok_or_else(|| anyhow!("output has no filename"))?,
+    );
+    recipe.input = input_dst.clone();
+    recipe.output = output_dst.clone();
+
+    // Run, with stages captured to <dir>/stages/<output_stem>/.
+    let stages_dir = dir
+        .join("stages")
+        .join(output.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("render")));
+    run_chain_in_memory_with_stages(&recipe, Some(&stages_dir))?;
+
+    let output_hash = lumen_io::hash_file(&output_dst).ok();
+
+    // Append signed audit entry.
+    let entry = case::append_entry(
+        dir,
+        case::AuditEntryDraft {
+            action: "render".into(),
+            note: if note.is_empty() {
+                format!("Recipe applied: {}", recipe_dst.file_name().unwrap().to_string_lossy())
+            } else {
+                note.to_string()
+            },
+            input_hash,
+            output_hash,
+            recipe_hash,
+        },
+    )?;
+
+    println!("wrote {}", output_dst.display());
+    eprintln!(
+        "audit entry seq {} signed by operator {}",
+        entry.seq, entry.operator_public_key_hex
+    );
+    Ok(())
+}
+
+fn cmd_case_note(dir: &std::path::Path, note: &str) -> Result<()> {
+    let entry = case::append_entry(
+        dir,
+        case::AuditEntryDraft {
+            action: "note".into(),
+            note: note.to_string(),
+            ..Default::default()
+        },
+    )?;
+    println!("{}", serde_json::to_string_pretty(&entry)?);
+    Ok(())
+}
+
+fn cmd_case_audit(dir: &std::path::Path) -> Result<()> {
+    let entries = case::verify_audit_log(dir)?;
+    let m = case::load_metadata(dir)?;
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "case": m,
+        "audit_chain_verified": true,
+        "entry_count": entries.len(),
+        "entries": entries,
+    }))?);
+    Ok(())
+}
+
+fn cmd_case_export(dir: &std::path::Path, output: &std::path::Path) -> Result<()> {
+    // Verify before export so we never bundle a broken chain.
+    case::verify_audit_log(dir)?;
+    case::export_zip(dir, output)?;
+    let h = lumen_io::hash_file(output).ok();
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "exported_zip": output.display().to_string(),
+        "size_bytes": std::fs::metadata(output)?.len(),
+        "blake3_hash": h,
+    }))?);
+    Ok(())
 }
 
 fn cmd_batch(

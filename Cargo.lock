@@ -2130,7 +2130,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "blake3",
  "clap",
+ "ed25519-dalek",
  "lumen-api",
  "lumen-audio",
  "lumen-auth",
@@ -2164,6 +2166,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

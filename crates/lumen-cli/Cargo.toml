@@ -36,6 +36,10 @@ tokio.workspace = true
 axum.workspace = true
 time = { workspace = true }
 rayon.workspace = true
+ed25519-dalek = "2"
+zip = "2"
+uuid = { workspace = true }
+blake3 = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
