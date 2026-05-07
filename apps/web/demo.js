@@ -952,6 +952,27 @@
     refreshAll();
   }
 
+  // Load a built-in sample image by URL.
+  function loadBuiltinSample(url, captionLabel) {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      baseW = img.naturalWidth;
+      baseH = img.naturalHeight;
+      [inputCanvas, outputCanvas].forEach(c => { c.width = baseW; c.height = baseH; });
+      inputCtx.drawImage(img, 0, 0);
+      baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+      const stamp = $('#demo-render-time');
+      if (stamp) stamp.textContent = `Loaded ${captionLabel} (${baseW}×${baseH}). Click Smart Auto to see Lumen analyze + clarify.`;
+      refreshAll();
+    };
+    img.onerror = () => {
+      const stamp = $('#demo-render-time');
+      if (stamp) stamp.textContent = `Couldn't load ${url}.`;
+    };
+    img.src = url;
+  }
+
   function downloadOutput() {
     if (!outputCanvas || baseW === 0) return;
     outputCanvas.toBlob((blob) => {
@@ -1044,10 +1065,12 @@
     $('#demo-copy')  && $('#demo-copy').addEventListener('click', copyRecipe);
     $('#demo-reset') && $('#demo-reset').addEventListener('click', reset);
     $('#demo-clear') && $('#demo-clear').addEventListener('click', clearChain);
-    $('#demo-auto')     && $('#demo-auto').addEventListener('click', autoEnhance);
-    $('#demo-clarify')  && $('#demo-clarify').addEventListener('click', () => clarifyCctv(null));
-    $('#demo-smart')    && $('#demo-smart').addEventListener('click', smartAuto);
-    $('#demo-download') && $('#demo-download').addEventListener('click', downloadOutput);
+    $('#demo-auto')         && $('#demo-auto').addEventListener('click', autoEnhance);
+    $('#demo-clarify')      && $('#demo-clarify').addEventListener('click', () => clarifyCctv(null));
+    $('#demo-smart')        && $('#demo-smart').addEventListener('click', smartAuto);
+    $('#demo-download')     && $('#demo-download').addEventListener('click', downloadOutput);
+    $('#demo-sample-cctv')  && $('#demo-sample-cctv').addEventListener('click', () => loadBuiltinSample('sample-cctv.jpg', 'CCTV sample'));
+    $('#demo-sample-photo') && $('#demo-sample-photo').addEventListener('click', () => loadBuiltinSample('sample.png',     'photo sample'));
 
     const fileInput = $('#demo-file');
     if (fileInput) {
