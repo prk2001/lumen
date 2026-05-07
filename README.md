@@ -4,6 +4,24 @@
 
 > **Professional-grade photo and video enhancement, end to end.**
 
+## Forensic / police-grade chain of custody
+
+Lumen ships an Ed25519-signed, hash-chained audit log per case. Every
+operator gets a local keypair (`~/.lumen/operator.json`); every render
+appends a signed entry tied to BLAKE3 hashes of the input, output, and
+recipe; every prior entry chains into the next. Tampering with any
+past entry breaks verification of everything after. A case folder
+exports as a single tamper-evident zip. See [`docs/FORENSIC.md`](docs/FORENSIC.md)
+for the full workflow.
+
+```bash
+lumen operator init --name "Det. ..." --agency "..." --identifier "BADGE-..."
+lumen case init     --dir CASE --case-id ... --evidence-id ... --input X
+lumen case render   --dir CASE --recipe r.json --input X --output Y --note "..."
+lumen case audit    --dir CASE       # verifies signatures + chain
+lumen case export   --dir CASE --output evidence.lumenpkg.zip
+```
+
 ## TL;DR — drop in a blurry photo, click one button, done.
 
 The live site at [`/#demo`](https://prk2001.github.io/lumen/#demo) runs
