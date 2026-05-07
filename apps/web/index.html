@@ -240,6 +240,122 @@
   .tech .item .val { font-size: 15px; font-weight: 500; margin-top: 4px; }
   .tech .item .why { font-size: 13px; color: var(--dim); margin-top: 6px; }
 
+  /* Live demo */
+  #demo .lead { margin-bottom: 32px; }
+  .demo-stage {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px;
+  }
+  .demo-frame {
+    background:
+      repeating-conic-gradient(#1d2027 0% 25%, #161920 0% 50%) 0 0 / 14px 14px;
+    border: 1px solid var(--border); border-radius: 8px;
+    aspect-ratio: 640 / 420;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .demo-frame canvas { max-width: 100%; max-height: 100%; display: block; image-rendering: -webkit-optimize-contrast; }
+  .demo-cap { font: 11px/1 ui-monospace, monospace; color: var(--dim); padding: 8px 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .chain-strip {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-top: 24px; padding: 14px 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .chain-strip .chip {
+    background: var(--panel-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 12px; font-size: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all .15s;
+  }
+  .chain-strip .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .chain-strip .chip.active {
+    border-color: var(--accent); color: var(--accent-2);
+    background: rgba(214,168,84,0.08);
+  }
+  .chain-strip .chip .n {
+    font: 10px/1 ui-monospace, monospace;
+    background: var(--code-bg); color: var(--accent);
+    padding: 3px 5px; border-radius: 3px;
+  }
+  .chain-strip .chip .x { opacity: 0.5; margin-left: 4px; }
+  .chain-strip .chip .x:hover { opacity: 1; color: var(--warn); }
+
+  .add-wrap { margin-left: auto; }
+  .add-select, .chain-strip select {
+    background: var(--code-bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font: 12px ui-monospace, monospace;
+    cursor: pointer;
+  }
+  .add-select:hover { border-color: var(--accent); }
+
+  .demo-row {
+    display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px;
+    margin-top: 16px;
+  }
+  #demo-controls {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px;
+    min-height: 220px;
+  }
+  .controls-head .effect-id {
+    font: 11px ui-monospace, monospace; color: var(--accent);
+    background: rgba(214,168,84,0.10); padding: 4px 8px; border-radius: 4px;
+    display: inline-block; margin-bottom: 14px;
+  }
+  .control {
+    display: grid; grid-template-columns: 1fr auto auto; gap: 12px;
+    align-items: center; padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .control:last-child { border-bottom: none; }
+  .control .lbl {
+    color: var(--dim); font-size: 13px;
+  }
+  .control .lbl code {
+    font-size: 10px; color: var(--accent); padding: 1px 4px;
+    background: var(--code-bg); margin-left: 6px;
+  }
+  .control input[type="range"] { width: 220px; accent-color: var(--accent); }
+  .control input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+  .control select {
+    background: var(--code-bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font: 12px ui-monospace, monospace;
+  }
+  .control .val { font: 12px ui-monospace, monospace; color: var(--accent-2); min-width: 48px; text-align: right; }
+
+  #demo-recipe-wrap {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  #demo-recipe-wrap .head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  #demo-recipe {
+    margin: 0; border: none; background: var(--code-bg); padding: 14px 16px;
+    flex: 1; overflow: auto; font-size: 12px;
+    border-radius: 0;
+  }
+  .btn.small {
+    padding: 5px 10px; font-size: 11px; border-radius: 4px;
+  }
+  #demo-render-time {
+    color: var(--dim); font-size: 11px; font-family: ui-monospace, monospace;
+    margin-top: 12px; text-align: right;
+  }
+  .hint { color: var(--dim); font-size: 13px; }
+
+  @media (max-width: 820px) {
+    .demo-stage, .demo-row { grid-template-columns: 1fr; }
+    .control input[type="range"] { width: 160px; }
+  }
+
   /* Footer */
   footer { padding: 48px 0; color: var(--dim); font-size: 13px; }
   footer .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
@@ -260,6 +376,7 @@
     <a href="#" class="brand"><span class="dot"></span>LUMEN</a>
     <a class="link" href="#capabilities">Capabilities</a>
     <a class="link" href="#effects">Effects</a>
+    <a class="link" href="#demo">Live demo</a>
     <a class="link" href="#cli">CLI</a>
     <a class="link" href="#architecture">Architecture</a>
     <a class="link" href="#start">Get Started</a>
@@ -285,12 +402,55 @@
       <div class="stat"><div class="num">155+</div><div class="lbl">Passing tests</div></div>
     </div>
     <div class="ctas">
-      <a class="btn primary" href="#start">Get started →</a>
+      <a class="btn primary" href="#demo">Try it live →</a>
       <a class="btn" href="#cli">See the CLI</a>
       <a class="btn" href="#architecture">How it works</a>
     </div>
   </div>
 </header>
+
+<section id="demo">
+  <div class="container">
+    <div class="eyebrow">Try it · running in your browser</div>
+    <h2>Live demo</h2>
+    <p class="lead">
+      Five Lumen effects, ported faithfully to JavaScript and running
+      against a sample image right here. Same effect IDs, same parameter
+      shapes, same scene-linear math, same recipe JSON the
+      <code>lumen pipeline</code> CLI consumes. Drag the sliders and
+      watch the output update in real time.
+    </p>
+
+    <div class="demo-stage">
+      <div>
+        <div class="demo-cap">Input</div>
+        <div class="demo-frame"><canvas id="demo-input"></canvas></div>
+      </div>
+      <div>
+        <div class="demo-cap">Output</div>
+        <div class="demo-frame"><canvas id="demo-output"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chain-strip" id="demo-chain"></div>
+
+    <div class="demo-row">
+      <div id="demo-controls"></div>
+      <div id="demo-recipe-wrap">
+        <div class="head">
+          <span>Recipe JSON · same format as <code style="font-size:10px;background:var(--code-bg)">lumen pipeline --recipe</code></span>
+          <span style="display:flex;gap:6px;">
+            <button class="btn small" id="demo-copy">Copy</button>
+            <button class="btn small" id="demo-reset">Reset</button>
+            <button class="btn small" id="demo-clear">Clear</button>
+          </span>
+        </div>
+<pre id="demo-recipe">{}</pre>
+      </div>
+    </div>
+    <div id="demo-render-time">…</div>
+  </div>
+</section>
 
 <section id="capabilities">
   <div class="container">
@@ -616,5 +776,6 @@ cargo build --bin cli
   </div>
 </footer>
 
+<script src="demo.js" defer></script>
 </body>
 </html>
