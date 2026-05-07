@@ -1,0 +1,6 @@
+# Cloudflare Pages / Workers config (optional alternative).
+# `wrangler pages deploy apps/web` works without this file too.
+
+name = "lumen-site"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "apps/web"

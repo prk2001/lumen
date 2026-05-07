@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen — page not found</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="robots" content="noindex">
+<style>
+  :root { --bg: #0a0b0e; --fg: #e9ebef; --dim: #8d92a0; --accent: #d6a854; --accent-2: #f0c570; --border: #20242c; --panel: #14171c; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg); display: grid; place-items: center;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    padding: 24px;
+    background:
+      radial-gradient(ellipse 800px 400px at 80% 0%, rgba(214,168,84,0.12), transparent 60%),
+      var(--bg);
+  }
+  main { max-width: 540px; text-align: center; }
+  .code { font: 14px ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); letter-spacing: 0.16em; text-transform: uppercase; }
+  h1 { font-size: 84px; font-weight: 700; letter-spacing: -0.04em; margin: 12px 0 16px;
+       background: linear-gradient(180deg, #fff, #cfd2d9 80%);
+       -webkit-background-clip: text; background-clip: text; color: transparent; }
+  p { color: var(--dim); font-size: 17px; margin-bottom: 28px; }
+  a.btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 20px; border-radius: 6px; font-size: 14px; font-weight: 500;
+    border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+    text-decoration: none; transition: all .15s;
+  }
+  a.btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+  <main>
+    <div class="code">404 · NOT FOUND</div>
+    <h1>Off-frame.</h1>
+    <p>That URL doesn't render. The pipeline can't find it. Head back to the source and try again.</p>
+    <a class="btn" href="/">← Back to Lumen</a>
+  </main>
+</body>
+</html>

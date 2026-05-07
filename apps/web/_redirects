@@ -1,0 +1,5 @@
+# Netlify / Cloudflare Pages redirects
+# Format: source destination [status]
+
+# SPA fallback (none — fully static for now). 404 is served by 404.html.
+/*    /404.html   404

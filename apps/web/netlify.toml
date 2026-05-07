@@ -1,0 +1,26 @@
+# Netlify config — build is a no-op (the site is fully static).
+# Connect your repo at https://app.netlify.com/start, point at this
+# directory (apps/web/), and the publish directory below picks it up.
+
+[build]
+  base    = "apps/web"
+  publish = "apps/web"
+  command = "echo 'static site — nothing to build'"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[redirects]]
+  from   = "/*"
+  to     = "/404.html"
+  status = 404
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options             = "DENY"
+    X-Content-Type-Options      = "nosniff"
+    Referrer-Policy             = "strict-origin-when-cross-origin"
+    Permissions-Policy          = "interest-cohort=()"
+    Strict-Transport-Security   = "max-age=63072000; includeSubDomains; preload"
+    Content-Security-Policy     = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'"
