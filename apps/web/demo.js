@@ -794,25 +794,98 @@
   let baseImageData = null, baseW = 0, baseH = 0;
   let renderToken = 0;
 
+  // Per-stage cache: input ImageData + one ImageData per effect.
+  // Used by the stages strip to let users see exactly what each step did.
+  let stageSnapshots = [];
+
   function applyChain() {
     if (!baseImageData) return;
     const myToken = ++renderToken;
-    // Lift to linear float, run chain, return.
+    // Lift to linear float, run chain, capture per-stage snapshots.
     const buf = imageDataToLinearF32(baseImageData);
     const t0 = performance.now();
+    const snapshots = [{ label: 'input', effect: null, imageData: baseImageData }];
     for (const step of chain) {
       const eff = effectById(step.effect);
       if (!eff) continue;
       const filled = Object.assign(defaultParams(eff), step.params || {});
       eff.apply(buf, baseW, baseH, filled);
       if (myToken !== renderToken) return; // user moved on
+      // Snapshot AFTER this step. Convert linear back to sRGB ImageData
+      // (each snapshot is a renderable thumbnail of the chain at that point).
+      snapshots.push({
+        label: eff.metadata?.display_name || eff.label || step.effect,
+        effect: step.effect,
+        imageData: linearF32ToImageData(buf, baseW, baseH),
+      });
     }
     const dt = performance.now() - t0;
-    const out = linearF32ToImageData(buf, baseW, baseH);
-    outputCtx.putImageData(out, 0, 0);
+    stageSnapshots = snapshots;
+    const finalOut = snapshots[snapshots.length - 1].imageData;
+    outputCtx.putImageData(finalOut, 0, 0);
     const stamp = document.querySelector('#demo-render-time');
-    if (stamp) stamp.textContent = `Rendered ${chain.length} effect${chain.length === 1 ? '' : 's'} in ${dt.toFixed(1)} ms`;
+    if (stamp) stamp.textContent = `Rendered ${chain.length} effect${chain.length === 1 ? '' : 's'} in ${dt.toFixed(1)} ms · ${snapshots.length} stages captured`;
     refreshRecipe();
+    refreshStagesStrip();
+  }
+
+  // ─── Stages strip ───────────────────────────────────────────────────
+  // Below the compare pane, show a thumbnail per pipeline stage so the
+  // user can see (and inspect) every intermediate frame. Click a
+  // thumbnail to load it as the "After" in the compare slider — useful
+  // for picking the LAST GOOD STAGE if a later step blew things up.
+  function refreshStagesStrip() {
+    const strip = document.querySelector('#demo-stages-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+    if (stageSnapshots.length <= 1) {
+      strip.style.display = 'none';
+      return;
+    }
+    strip.style.display = 'flex';
+
+    // Compute thumbnail height fitting our 86px card height,
+    // preserving aspect.
+    const THUMB_H = 64;
+    const aspect = baseW / Math.max(1, baseH);
+    const thumbW = Math.round(THUMB_H * aspect);
+
+    stageSnapshots.forEach((stage, idx) => {
+      const card = document.createElement('button');
+      card.className = 'stage-card' + (idx === stageSnapshots.length - 1 ? ' active' : '');
+      card.title = `Click to set output to: ${stage.label}`;
+
+      const cv = document.createElement('canvas');
+      cv.width = stage.imageData.width;
+      cv.height = stage.imageData.height;
+      cv.style.width = thumbW + 'px';
+      cv.style.height = THUMB_H + 'px';
+      cv.getContext('2d').putImageData(stage.imageData, 0, 0);
+
+      const cap = document.createElement('div');
+      cap.className = 'stage-cap';
+      cap.innerHTML = `
+        <span class="n">${String(idx).padStart(2, '0')}</span>
+        <span class="lbl">${idx === 0 ? 'input' : stage.label}</span>
+      `;
+
+      card.appendChild(cv);
+      card.appendChild(cap);
+
+      card.addEventListener('click', () => {
+        // Render this stage's pixels into the output canvas; the
+        // compare slider now reveals input vs. THIS stage.
+        outputCtx.putImageData(stage.imageData, 0, 0);
+        document.querySelectorAll('.stage-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+        const stamp = document.querySelector('#demo-render-time');
+        if (stamp) stamp.textContent =
+          idx === 0 ? 'Showing the original input.' :
+          `Showing stage ${idx}: after ${stage.label}.`;
+      });
+
+      strip.appendChild(card);
+    });
   }
 
   // Debounced apply for slider drags.
