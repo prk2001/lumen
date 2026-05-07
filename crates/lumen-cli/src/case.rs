@@ -63,10 +63,22 @@ pub struct AuditEntry {
     pub action: String,
     /// Free-form description for humans.
     pub note: String,
-    /// Optional hashes of relevant artifacts.
+    /// Optional hashes of relevant artifacts. The primary hash is
+    /// BLAKE3 (fast + content-addressing); when FIPS mode is active
+    /// (`--fips` / `LUMEN_FIPS=1`), the same artifact is also hashed
+    /// with SHA-256 (FIPS 180-4 approved) and recorded in the
+    /// matching `_sha256` field. Both hashes are part of the signed
+    /// payload, so a verifier can prove the file's integrity under
+    /// either algorithm.
     pub input_hash: Option<String>,
     pub output_hash: Option<String>,
     pub recipe_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe_sha256: Option<String>,
     /// Hex Ed25519 signature of `(prev_entry_signature || canonical entry bytes)`.
     pub prev_entry_signature_hex: String,
     pub entry_signature_hex: String,
@@ -79,6 +91,9 @@ pub struct AuditEntryDraft {
     pub input_hash: Option<String>,
     pub output_hash: Option<String>,
     pub recipe_hash: Option<String>,
+    pub input_sha256: Option<String>,
+    pub output_sha256: Option<String>,
+    pub recipe_sha256: Option<String>,
 }
 
 pub fn case_metadata_path(case_dir: &Path) -> PathBuf {
@@ -111,16 +126,19 @@ pub fn init(
         std::fs::create_dir_all(case_dir.join(sub))?;
     }
 
-    // Copy original input into inputs/ if supplied.
-    let original_input_hash = match original_input {
+    // Copy original input into inputs/ if supplied. In FIPS mode we
+    // also record SHA-256 alongside BLAKE3 (FIPS 180-4 vs the faster
+    // primary BLAKE3 hash).
+    let (original_input_hash, original_input_sha256) = match original_input {
         Some(p) => {
             let dst = case_dir.join("inputs").join(
                 p.file_name().ok_or_else(|| anyhow!("input has no filename"))?,
             );
             std::fs::copy(p, &dst)?;
-            Some(blake3_hex_of_file(&dst)?)
+            let h = dual_hash_file(&dst)?;
+            (Some(h.blake3), if fips_mode() { Some(h.sha256) } else { None })
         }
-        None => None,
+        None => (None, None),
     };
 
     let metadata = CaseMetadata {
@@ -158,6 +176,9 @@ pub fn init(
             input_hash: original_input_hash,
             output_hash: None,
             recipe_hash: None,
+            input_sha256: original_input_sha256,
+            output_sha256: None,
+            recipe_sha256: None,
         },
     )?;
 
@@ -217,6 +238,9 @@ pub fn append_entry(case_dir: &Path, draft: AuditEntryDraft) -> Result<AuditEntr
         input_hash: draft.input_hash,
         output_hash: draft.output_hash,
         recipe_hash: draft.recipe_hash,
+        input_sha256: draft.input_sha256,
+        output_sha256: draft.output_sha256,
+        recipe_sha256: draft.recipe_sha256,
         prev_entry_signature_hex: prev.clone(),
         entry_signature_hex: String::new(), // filled below
     };
@@ -514,6 +538,178 @@ fn blake3_hex_of_file(p: &Path) -> Result<String> {
     Ok(format!("blake3:{}", blake3::hash(&bytes).to_hex()))
 }
 
+/// Returns true when the operator has requested FIPS mode (`--fips`
+/// or `LUMEN_FIPS=1`). In FIPS mode every artifact is dual-hashed
+/// (BLAKE3 + SHA-256) and the SHA-256 is part of the signed payload,
+/// so a verifier can prove integrity under FIPS 180-4.
+pub fn fips_mode() -> bool {
+    std::env::var_os("LUMEN_FIPS").is_some()
+}
+
+/// Per-case FIPS status: how many entries carry SHA-256 alongside
+/// BLAKE3, and whether every artifact-bearing entry is fully covered.
+/// `--require-fips` on `case audit` enforces `all_artifacts_have_sha256`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FipsSummary {
+    pub all_artifacts_have_sha256: bool,
+    pub entries_with_sha256: usize,
+    pub entries_with_artifacts: usize,
+}
+
+pub fn fips_summary(case_dir: &Path) -> Result<FipsSummary> {
+    let entries = read_audit_log(case_dir)?;
+    let mut have = 0;
+    let mut artifact_entries = 0;
+    let mut all_ok = true;
+    for e in entries {
+        // Does this entry reference any artifact?
+        let has_blake = e.input_hash.is_some()
+            || e.output_hash.is_some()
+            || e.recipe_hash.is_some();
+        if !has_blake {
+            continue;
+        }
+        artifact_entries += 1;
+        // Each blake3 must have a paired sha256.
+        let in_ok = e.input_hash.is_none() || e.input_sha256.is_some();
+        let out_ok = e.output_hash.is_none() || e.output_sha256.is_some();
+        let rcp_ok = e.recipe_hash.is_none() || e.recipe_sha256.is_some();
+        let entry_full = in_ok && out_ok && rcp_ok;
+        if entry_full {
+            have += 1;
+        } else {
+            all_ok = false;
+        }
+    }
+    Ok(FipsSummary {
+        all_artifacts_have_sha256: all_ok && artifact_entries > 0,
+        entries_with_sha256: have,
+        entries_with_artifacts: artifact_entries,
+    })
+}
+
+fn sha256_hex_of_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    format!("sha256:{:x}", h.finalize())
+}
+
+/// Hash a file with both BLAKE3 and SHA-256. SHA-256 is FIPS 180-4
+/// approved and required for federal evidence handling; BLAKE3 is
+/// retained because it's the primary content-addressing primitive.
+pub fn dual_hash_file(p: &Path) -> Result<DualHash> {
+    let bytes = std::fs::read(p)?;
+    Ok(DualHash {
+        blake3: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+        sha256: sha256_hex_of_bytes(&bytes),
+        size_bytes: bytes.len() as u64,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DualHash {
+    pub blake3: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+/// Verify a `.lumenpkg.zip` evidence bundle end-to-end:
+///   1. Hash the zip with BOTH BLAKE3 and SHA-256 (FIPS-friendly).
+///   2. Unpack into a temporary directory (auto-cleanup on drop).
+///   3. Run `verify_audit_log_strict` — every signature checks AND
+///      every artifact hash still matches a real file in the bundle.
+///   4. Compute `signoff_status` so reviewers see at a glance whether
+///      an independent operator has approved the case.
+///
+/// Returns a structured report; the CLI converts it to JSON.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct VerifyExportReport {
+    pub bundle_path: String,
+    pub bundle_hash: DualHash,
+    pub case: CaseMetadata,
+    pub audit_chain_verified: bool,
+    pub strict: StrictAuditReport,
+    pub signoff: SignoffStatus,
+}
+
+pub fn verify_exported_zip(zip_path: &Path) -> Result<VerifyExportReport> {
+    use std::io::Read;
+    if !zip_path.is_file() {
+        return Err(anyhow!("not a file: {}", zip_path.display()));
+    }
+    // 1. Hash the zip itself.
+    let bundle_hash = dual_hash_file(zip_path)?;
+
+    // 2. Unpack into a temp dir. tempfile::TempDir auto-cleans on drop.
+    let tmp = tempfile::Builder::new()
+        .prefix("lumen-verify-")
+        .tempdir()
+        .context("creating temp dir for verify-export")?;
+    let unpack_root = tmp.path();
+
+    let f = std::fs::File::open(zip_path)
+        .with_context(|| format!("opening {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(f).context("opening zip archive")?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let outpath = match entry.enclosed_name() {
+            Some(p) => unpack_root.join(p),
+            None => continue, // skip entries with absolute / parent-traversal paths
+        };
+        if entry.is_dir() {
+            std::fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(parent) = outpath.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut out = std::fs::File::create(&outpath)?;
+            let mut buf = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut buf)?;
+            std::io::Write::write_all(&mut out, &buf)?;
+        }
+    }
+
+    // 3. Locate the case folder. It might be at the root, or one level
+    //    deep (e.g. zips that preserve the parent dir name).
+    let case_dir = locate_case_dir(unpack_root)?;
+
+    // 4. Run the full strict audit + signoff inspection.
+    let metadata = load_metadata(&case_dir)?;
+    let strict = verify_audit_log_strict(&case_dir)?;
+    let signoff = signoff_status(&case_dir, &metadata)?;
+
+    // tmp drops here — temp dir auto-cleaned.
+    Ok(VerifyExportReport {
+        bundle_path: zip_path.display().to_string(),
+        bundle_hash,
+        case: metadata,
+        audit_chain_verified: true, // strict audit already verified the chain
+        strict,
+        signoff,
+    })
+}
+
+/// Find the directory that contains `case.json`. Looks at the unpack
+/// root first, then one level down.
+fn locate_case_dir(root: &Path) -> Result<std::path::PathBuf> {
+    if root.join("case.json").is_file() {
+        return Ok(root.to_path_buf());
+    }
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let p = entry.path();
+            if p.join("case.json").is_file() {
+                return Ok(p);
+            }
+        }
+    }
+    Err(anyhow!(
+        "no case.json found in archive (looked at root + one level deep)"
+    ))
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -722,6 +918,29 @@ mod tests {
         assert_eq!(verified.len(), 3); // case-init + 2 sign-offs
 
         std::env::remove_var("LUMEN_OPERATOR");
+    }
+
+    #[test]
+    fn verify_exported_zip_roundtrip() {
+        with_test_operator(|| {
+            let dir = fresh_dir();
+            let staged = dir.join("staged.png");
+            std::fs::write(&staged, b"some png-ish bytes for test").unwrap();
+            init(&dir, "C-VX-1", "EVD-VX-1", "Verify Export Test", "Lab", Some(&staged))
+                .unwrap();
+            // Export to zip
+            let zip_path = dir.join("bundle.lumenpkg.zip");
+            export_zip(&dir, &zip_path).unwrap();
+            // Verify
+            let report = verify_exported_zip(&zip_path).unwrap();
+            assert!(report.audit_chain_verified);
+            assert!(report.strict.all_artifacts_match,
+                "every referenced artifact must be present in the round-tripped bundle");
+            // Bundle hash recorded with both algorithms.
+            assert!(report.bundle_hash.blake3.starts_with("blake3:"));
+            assert!(report.bundle_hash.sha256.starts_with("sha256:"));
+            assert!(report.bundle_hash.size_bytes > 0);
+        });
     }
 
     #[test]

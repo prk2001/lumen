@@ -49,6 +49,20 @@ struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
 
+    /// Air-gapped policy: hard-error on any code path that would open
+    /// a network socket. Required for classified / SCIF environments.
+    /// Equivalent to setting LUMEN_NO_NETWORK=1 in the environment.
+    #[arg(long, global = true, default_value_t = false)]
+    no_network: bool,
+
+    /// FIPS-mode operation: every artifact hash recorded is dual-stored
+    /// as both BLAKE3 and SHA-256. Required for federal evidence
+    /// handling (FIPS 180-4 / FIPS 140-3 alignment). Also enables
+    /// extra warnings when non-approved primitives would be used.
+    /// Equivalent to setting LUMEN_FIPS=1 in the environment.
+    #[arg(long, global = true, default_value_t = false)]
+    fips: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -112,6 +126,10 @@ enum CaseCommand {
         /// (analyst-vs-reviewer separation). Exits non-zero if no
         /// such sign-off exists.
         #[arg(long, default_value_t = false)] require_signoff: bool,
+        /// Require every artifact-bearing audit entry to carry a
+        /// SHA-256 hash alongside BLAKE3 (FIPS 180-4 / 140-3). Exits
+        /// non-zero if any entry was recorded without SHA-256.
+        #[arg(long, default_value_t = false)] require_fips: bool,
     },
     /// Append a reviewer's sign-off to the audit log. The reviewer
     /// must be running under a different operator identity (different
@@ -129,6 +147,17 @@ enum CaseCommand {
     Export {
         #[arg(long)] dir: PathBuf,
         #[arg(long)] output: PathBuf,
+    },
+    /// Verify a received .lumenpkg.zip end-to-end: hash the bundle
+    /// (BLAKE3 + SHA-256), unpack to a temp dir, run the full strict
+    /// audit (signature chain + per-artifact integrity), and report
+    /// the signoff status. Returns non-zero if any check fails.
+    /// Useful for receiving evidence in a forensic lab pipeline.
+    VerifyExport {
+        #[arg(long)] input: PathBuf,
+        /// Require at least one independent reviewer's `sign-off`
+        /// approval before considering the bundle accepted.
+        #[arg(long, default_value_t = false)] require_signoff: bool,
     },
     /// Render a self-contained HTML report into `reports/` showing the
     /// case metadata, full audit timeline, and embedded thumbnails of
@@ -408,6 +437,15 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<()> {
+    // Propagate global policy flags via environment variables so the
+    // case / operator / report modules see them without threading the
+    // Cli struct everywhere.
+    if cli.no_network || std::env::var_os("LUMEN_NO_NETWORK").is_some() {
+        std::env::set_var("LUMEN_NO_NETWORK", "1");
+    }
+    if cli.fips || std::env::var_os("LUMEN_FIPS").is_some() {
+        std::env::set_var("LUMEN_FIPS", "1");
+    }
     match cli.command {
         Command::Probe { path } => cmd_probe(&path),
         Command::ListEffects => cmd_list_effects(),
@@ -418,6 +456,14 @@ fn run(cli: Cli) -> Result<()> {
             cmd_pipeline(&recipe, jpeg_quality, save_stages.as_deref())
         }
         Command::Serve { recipe, port, jpeg_quality } => {
+            // Air-gap policy: refuse to bind any socket.
+            if std::env::var_os("LUMEN_NO_NETWORK").is_some() {
+                return Err(anyhow!(
+                    "refusing to start `lumen serve` because --no-network / \
+                     LUMEN_NO_NETWORK is set. Air-gapped policy forbids opening \
+                     network sockets."
+                ));
+            }
             let registry = build_registry()?;
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -482,13 +528,16 @@ fn run(cli: Cli) -> Result<()> {
                 cmd_case_render(&dir, &recipe, &input, &output, &note)
             }
             CaseCommand::Note { dir, note } => cmd_case_note(&dir, &note),
-            CaseCommand::Audit { dir, strict, require_signoff } => {
-                cmd_case_audit(&dir, strict, require_signoff)
+            CaseCommand::Audit { dir, strict, require_signoff, require_fips } => {
+                cmd_case_audit(&dir, strict, require_signoff, require_fips)
             }
             CaseCommand::SignOff { dir, decision, note } => {
                 cmd_case_signoff(&dir, &decision, &note)
             }
             CaseCommand::Export { dir, output } => cmd_case_export(&dir, &output),
+            CaseCommand::VerifyExport { input, require_signoff } => {
+                cmd_case_verify_export(&input, require_signoff)
+            }
             CaseCommand::Report { dir, output } => cmd_case_report(&dir, &output),
         },
         Command::Project { sub } => match sub {
@@ -561,8 +610,16 @@ fn cmd_case_render(
     if input_dst != input.to_path_buf() {
         std::fs::copy(input, &input_dst)?;
     }
-    let recipe_hash = lumen_io::hash_file(&recipe_dst).ok();
-    let input_hash = lumen_io::hash_file(&input_dst).ok();
+    let recipe_dual = case::dual_hash_file(&recipe_dst).ok();
+    let input_dual = case::dual_hash_file(&input_dst).ok();
+    let recipe_hash = recipe_dual.as_ref().map(|d| d.blake3.clone());
+    let input_hash = input_dual.as_ref().map(|d| d.blake3.clone());
+    let recipe_sha256 = if case::fips_mode() {
+        recipe_dual.as_ref().map(|d| d.sha256.clone())
+    } else { None };
+    let input_sha256 = if case::fips_mode() {
+        input_dual.as_ref().map(|d| d.sha256.clone())
+    } else { None };
 
     // Read recipe, override input/output to live inside the case folder.
     let recipe_str = std::fs::read_to_string(&recipe_dst)?;
@@ -579,7 +636,11 @@ fn cmd_case_render(
         .join(output.file_stem().unwrap_or_else(|| std::ffi::OsStr::new("render")));
     run_chain_in_memory_with_stages(&recipe, Some(&stages_dir))?;
 
-    let output_hash = lumen_io::hash_file(&output_dst).ok();
+    let output_dual = case::dual_hash_file(&output_dst).ok();
+    let output_hash = output_dual.as_ref().map(|d| d.blake3.clone());
+    let output_sha256 = if case::fips_mode() {
+        output_dual.as_ref().map(|d| d.sha256.clone())
+    } else { None };
 
     // Append signed audit entry.
     let entry = case::append_entry(
@@ -594,6 +655,9 @@ fn cmd_case_render(
             input_hash,
             output_hash,
             recipe_hash,
+            input_sha256,
+            output_sha256,
+            recipe_sha256,
         },
     )?;
 
@@ -656,9 +720,15 @@ fn cmd_case_signoff(dir: &std::path::Path, decision: &str, note: &str) -> Result
     Ok(())
 }
 
-fn cmd_case_audit(dir: &std::path::Path, strict: bool, require_signoff: bool) -> Result<()> {
+fn cmd_case_audit(
+    dir: &std::path::Path,
+    strict: bool,
+    require_signoff: bool,
+    require_fips: bool,
+) -> Result<()> {
     let m = case::load_metadata(dir)?;
     let signoff_status = case::signoff_status(dir, &m)?;
+    let fips_summary = case::fips_summary(dir)?;
     if strict {
         let report = case::verify_audit_log_strict(dir)?;
         let any_missing = report.artifacts.iter().any(|a| !a.ok);
@@ -669,6 +739,7 @@ fn cmd_case_audit(dir: &std::path::Path, strict: bool, require_signoff: bool) ->
                 "audit_chain_verified": true,
                 "all_artifacts_match": report.all_artifacts_match,
                 "signoff": signoff_status,
+                "fips": fips_summary,
                 "entry_count": report.entries.len(),
                 "artifact_count": report.artifacts.len(),
                 "artifacts": report.artifacts,
@@ -689,10 +760,18 @@ fn cmd_case_audit(dir: &std::path::Path, strict: bool, require_signoff: bool) ->
                 "case": m,
                 "audit_chain_verified": true,
                 "signoff": signoff_status,
+                "fips": fips_summary,
                 "entry_count": entries.len(),
                 "entries": entries,
             }))?
         );
+    }
+    if require_fips && !fips_summary.all_artifacts_have_sha256 {
+        return Err(anyhow!(
+            "audit failed --require-fips: one or more audit entries record \
+             a BLAKE3 hash without an accompanying SHA-256. Re-run the case \
+             with `--fips` set on every render to satisfy FIPS 180-4."
+        ));
     }
     if require_signoff && !signoff_status.has_independent_approval {
         return Err(anyhow!(
@@ -715,6 +794,25 @@ fn cmd_case_report(dir: &std::path::Path, output_filename: &str) -> Result<()> {
             "size_bytes": size,
         }))?
     );
+    Ok(())
+}
+
+fn cmd_case_verify_export(input: &std::path::Path, require_signoff: bool) -> Result<()> {
+    let report = case::verify_exported_zip(input)?;
+    let any_artifact_missing = !report.strict.all_artifacts_match;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if any_artifact_missing {
+        return Err(anyhow!(
+            "verify-export FAILED: bundle's audit log references artifacts that \
+             do not match their recorded BLAKE3 (see `strict.artifacts`)."
+        ));
+    }
+    if require_signoff && !report.signoff.has_independent_approval {
+        return Err(anyhow!(
+            "verify-export REJECTED: --require-signoff was set but no independent \
+             reviewer has approved this bundle."
+        ));
+    }
     Ok(())
 }
 
