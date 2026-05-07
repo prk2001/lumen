@@ -106,6 +106,29 @@ enum CaseCommand {
         /// Note attached to the audit entry (e.g. "applied clarify aggressive").
         #[arg(long, default_value = "")] note: String,
     },
+    /// Run multi-frame super-resolution within a case. Same algorithm
+    /// as `lumen super-resolve` (sub-pixel phase-correlated registration,
+    /// Lanczos upscale, median fusion), but every input frame is staged
+    /// into `inputs/`, every shift is recorded in a signed `super-resolve`
+    /// audit entry, and the output goes into `outputs/`. The shift
+    /// report (per-frame dx/dy/peak_score) is embedded in the entry's
+    /// note so a reviewer can spot any misregistration without
+    /// re-running the algorithm.
+    SuperResolve {
+        #[arg(long)] dir: PathBuf,
+        /// Two or more input image paths. Pass once per file or all at once.
+        #[arg(long = "input", value_name = "PATH", num_args = 1.., action = clap::ArgAction::Append)]
+        inputs: Vec<PathBuf>,
+        /// Output filename (relative to outputs/).
+        #[arg(long)] output: PathBuf,
+        /// Upscale factor 2..=8.
+        #[arg(long, default_value_t = 2)] scale: u32,
+        /// `median` (default, robust) or `mean`.
+        #[arg(long, default_value = "median")] fuse: String,
+        /// Reviewer-facing note (the per-frame shift report is appended
+        /// automatically).
+        #[arg(long, default_value = "")] note: String,
+    },
     /// Append a free-form note to the audit log (e.g. reviewer comments).
     Note {
         #[arg(long)] dir: PathBuf,
@@ -356,6 +379,26 @@ enum Command {
         /// Stacking mode: mean | median | max | min.
         #[arg(long, default_value = "mean")] mode: String,
     },
+    /// Extract frames from a video file as image files. Required step
+    /// when CCTV / dashcam / phone-recorded evidence arrives as a video
+    /// container — pull a contiguous range of frames so the SR pipeline
+    /// (`lumen super-resolve` / `lumen case super-resolve`) can fuse
+    /// them. Output filenames are zero-padded by frame index.
+    VideoExtract {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output_dir: PathBuf,
+        /// Inclusive start frame index (default 0).
+        #[arg(long, default_value_t = 0)] start: u64,
+        /// Exclusive end frame index. Default: probe + extract everything.
+        #[arg(long)] end: Option<u64>,
+        /// Stride: extract every N-th frame (default 1 = every frame).
+        /// Useful for "every 3rd frame for 30 fps SR" workflows.
+        #[arg(long, default_value_t = 1)] stride: u64,
+        /// Output format: png (default, lossless) | jpg.
+        #[arg(long, default_value = "png")] format: String,
+        /// Filename prefix (default "frame_").
+        #[arg(long, default_value = "frame_")] prefix: String,
+    },
     /// Multi-frame super-resolution with sub-pixel registration.
     ///
     /// Takes 2-30 frames of the same scene (e.g. 30 consecutive CCTV
@@ -544,6 +587,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::SuperResolve { inputs, output, scale, fuse } => {
             sr::cmd_super_resolve(&inputs, &output, scale, &fuse)
         }
+        Command::VideoExtract { input, output_dir, start, end, stride, format, prefix } => {
+            cmd_video_extract(&input, &output_dir, start, end, stride, &format, &prefix)
+        }
         Command::Operator { sub } => match sub {
             OperatorCommand::Init { name, agency, identifier, force } => {
                 cmd_operator_init(&name, &agency, &identifier, force)
@@ -556,6 +602,9 @@ fn run(cli: Cli) -> Result<()> {
             }
             CaseCommand::Render { dir, recipe, input, output, note } => {
                 cmd_case_render(&dir, &recipe, &input, &output, &note)
+            }
+            CaseCommand::SuperResolve { dir, inputs, output, scale, fuse, note } => {
+                cmd_case_super_resolve(&dir, &inputs, &output, scale, &fuse, &note)
             }
             CaseCommand::Note { dir, note } => cmd_case_note(&dir, &note),
             CaseCommand::Audit { dir, strict, require_signoff, require_fips } => {
@@ -695,6 +744,114 @@ fn cmd_case_render(
     eprintln!(
         "audit entry seq {} signed by operator {}",
         entry.seq, entry.operator_public_key_hex
+    );
+    Ok(())
+}
+
+/// Case-aware multi-frame super-resolution. Stages every input into
+/// `inputs/`, runs the SR pipeline, writes the fused output to
+/// `outputs/`, and appends a signed `super-resolve` audit entry whose
+/// note carries the full per-frame shift report. The output's
+/// BLAKE3 (+ SHA-256 in FIPS mode) is recorded so future strict
+/// audits can confirm the SR result hasn't been swapped.
+fn cmd_case_super_resolve(
+    dir: &std::path::Path,
+    inputs: &[std::path::PathBuf],
+    output: &std::path::Path,
+    scale: u32,
+    fuse_str: &str,
+    user_note: &str,
+) -> Result<()> {
+    if inputs.len() < 2 {
+        return Err(anyhow!(
+            "case super-resolve needs at least 2 frames; got {}",
+            inputs.len()
+        ));
+    }
+    let _meta = case::load_metadata(dir)?;
+    case::verify_audit_log(dir).map_err(|e| {
+        anyhow!("audit log was already broken before this super-resolve: {e}")
+    })?;
+
+    // Stage every input into inputs/, recording the BLAKE3 of each.
+    let mut staged: Vec<std::path::PathBuf> = Vec::with_capacity(inputs.len());
+    let mut input_hashes: Vec<String> = Vec::with_capacity(inputs.len());
+    let mut input_sha256s: Vec<String> = Vec::with_capacity(inputs.len());
+    for src in inputs {
+        let dst = dir.join("inputs").join(
+            src.file_name().ok_or_else(|| anyhow!("input has no filename"))?,
+        );
+        if dst != *src {
+            std::fs::copy(src, &dst)?;
+        }
+        let dual = case::dual_hash_file(&dst)?;
+        input_hashes.push(dual.blake3.clone());
+        if case::fips_mode() {
+            input_sha256s.push(dual.sha256);
+        }
+        staged.push(dst);
+    }
+
+    // Run SR.
+    let fuse = sr::FuseMode::parse(fuse_str)?;
+    let (frame, sr_report) = sr::super_resolve_files(&staged, scale, fuse)?;
+
+    // Write output into outputs/.
+    let output_dst = dir.join("outputs").join(
+        output.file_name().ok_or_else(|| anyhow!("output has no filename"))?,
+    );
+    lumen_io::encode_image(frame, &output_dst, lumen_io::ImageEncodeOptions::default())
+        .with_context(|| format!("encode {}", output_dst.display()))?;
+    let output_dual = case::dual_hash_file(&output_dst)?;
+    let output_sha256 = if case::fips_mode() { Some(output_dual.sha256.clone()) } else { None };
+
+    // Build the audit-log note: user note + per-frame shift report.
+    // The full SrReport JSON is embedded so a reviewer can read the
+    // shifts without re-running the algorithm. Keeping the report
+    // INSIDE the signed payload binds the reviewer's view of the SR
+    // provenance to the cryptographic chain.
+    let report_json = serde_json::to_string(&sr_report)
+        .unwrap_or_else(|_| "{}".to_string());
+    let note = if user_note.is_empty() {
+        format!(
+            "Multi-frame super-resolve ({} frames, scale={}, fuse={}). Report: {}",
+            sr_report.n_frames, sr_report.scale, sr_report.fuse, report_json
+        )
+    } else {
+        format!(
+            "{} | super-resolve ({} frames, scale={}, fuse={}). Report: {}",
+            user_note, sr_report.n_frames, sr_report.scale, sr_report.fuse, report_json
+        )
+    };
+
+    // Audit entry: action = "super-resolve". We record the FIRST
+    // input's hash in input_hash (the SR reference frame); the rest
+    // are listed in the embedded report. This keeps the schema stable
+    // (one input_hash per entry) while still binding every frame
+    // through the embedded report (which is part of the signed note).
+    let entry = case::append_entry(
+        dir,
+        case::AuditEntryDraft {
+            action: "super-resolve".into(),
+            note,
+            input_hash: input_hashes.first().cloned(),
+            output_hash: Some(output_dual.blake3.clone()),
+            recipe_hash: None,
+            input_sha256: input_sha256s.first().cloned(),
+            output_sha256,
+            recipe_sha256: None,
+        },
+    )?;
+
+    println!("wrote {}", output_dst.display());
+    eprintln!(
+        "super-resolve entry seq {} signed by operator {}",
+        entry.seq, entry.operator_public_key_hex
+    );
+    eprintln!(
+        "  {} input frames, scale={}, fuse={}, output {}x{}",
+        sr_report.n_frames, sr_report.scale, sr_report.fuse,
+        sr_report.output_w, sr_report.output_h,
     );
     Ok(())
 }
@@ -1465,6 +1622,86 @@ fn cmd_list_effects() -> Result<()> {
             println!("    {:<16} {}", spec.id, spec.description);
         }
     }
+    Ok(())
+}
+
+/// Extract frames from a video file as still images. Walks the
+/// requested range and writes each decoded frame to disk with a
+/// zero-padded index in the filename. Returns the number of frames
+/// written. Container support is whatever ffmpeg-next can decode
+/// (h264/h265/vp9/av1/mpeg4 in mp4/mkv/mov/webm/avi/etc.).
+fn cmd_video_extract(
+    input: &std::path::Path,
+    output_dir: &std::path::Path,
+    start: u64,
+    end: Option<u64>,
+    stride: u64,
+    format: &str,
+    prefix: &str,
+) -> Result<()> {
+    let stride = stride.max(1);
+    let format = format.to_lowercase();
+    if !matches!(format.as_str(), "png" | "jpg" | "jpeg") {
+        return Err(anyhow!("--format must be png or jpg, got '{}'", format));
+    }
+    std::fs::create_dir_all(output_dir)
+        .with_context(|| format!("create {}", output_dir.display()))?;
+
+    // Probe so we can default `end` to the full range, and so the
+    // padding width is right for the eventual filenames.
+    let probe = lumen_io::probe_video(input)
+        .map_err(|e| anyhow!("probe {}: {e}", input.display()))?;
+    let total = probe.frame_count.unwrap_or(0);
+    let end = end.unwrap_or_else(|| {
+        if total > 0 { total } else { start.saturating_add(1) }
+    });
+    if end <= start {
+        return Err(anyhow!(
+            "end ({}) must be > start ({})", end, start
+        ));
+    }
+    // Pad to the wider of the actual end-1 width or 6 digits.
+    let pad_width = ((end.saturating_sub(1)) as f64).log10().floor() as usize + 1;
+    let pad_width = pad_width.max(6);
+
+    let mut written: u64 = 0;
+    let mut last_logged: u64 = 0;
+    lumen_io::decode_video_range(input, start, end, |idx, frame| {
+        // Honor stride: drop frames whose offset from `start` isn't on stride.
+        if !(idx - start).is_multiple_of(stride) {
+            return Ok(());
+        }
+        let ext = if format == "png" { "png" } else { "jpg" };
+        let name = format!("{prefix}{:0width$}.{ext}", idx, width = pad_width);
+        let out_path = output_dir.join(&name);
+        lumen_io::encode_image(frame, &out_path, lumen_io::ImageEncodeOptions::default())
+            .map_err(|e| lumen_core::Error::Encode {
+                path: Some(out_path.clone()),
+                message: format!("{e}"),
+            })?;
+        written += 1;
+        // Log every 30 frames so long extracts show progress.
+        if written - last_logged >= 30 {
+            eprintln!("  ... extracted {written} frames");
+            last_logged = written;
+        }
+        Ok(())
+    })
+    .map_err(|e| anyhow!("decode_video_range: {e}"))?;
+
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "video": input.display().to_string(),
+        "output_dir": output_dir.display().to_string(),
+        "container": probe.container,
+        "codec": probe.codec,
+        "fps": format!("{}/{}", probe.fps.num, probe.fps.den),
+        "dimensions": [probe.dims.0, probe.dims.1],
+        "start": start,
+        "end": end,
+        "stride": stride,
+        "frames_written": written,
+        "format": format,
+    }))?);
     Ok(())
 }
 

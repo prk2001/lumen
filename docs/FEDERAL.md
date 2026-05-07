@@ -124,6 +124,66 @@ expert can take that recipe, run `lumen pipeline --recipe r.json` on
 the original input (also in the bundle), and produce a bit-exact match
 of the analyst's output.
 
+## End-to-end FAVIAU-style pipeline
+
+The standard federal-lab workflow, from a DVR-grabbed `.mp4` to a
+court-deliverable evidence package:
+
+```bash
+# 0. One-time: bootstrap analyst + reviewer identities.
+LUMEN_OPERATOR=~/.lumen/analyst.json   lumen --fips operator init \
+    --name "Det. A. Analyst"  --agency "FBI Lab" --identifier "ANL-1"
+LUMEN_OPERATOR=~/.lumen/reviewer.json  lumen --fips operator init \
+    --name "Det. B. Reviewer" --agency "FBI Lab" --identifier "REV-1"
+
+# 1. Extract a contiguous range of CCTV frames from the source video.
+LUMEN_OPERATOR=~/.lumen/analyst.json \
+lumen video-extract --input ./incoming/dvr-grab.mp4 \
+    --output-dir ./frames --start 100 --end 130 --stride 1 --format png
+
+# 2. Open a FIPS-mode case bound to the source video as the original.
+lumen --fips case init --dir ./case --case-id 2026-X --evidence-id EVD-1 \
+    --case-name "Lot B Surveillance" --agency "FBI Lab" \
+    --input ./incoming/dvr-grab.mp4
+
+# 3. Multi-frame super-resolve all 30 frames into a 4x SR composite,
+#    with the per-frame shift report recorded in the signed audit log.
+lumen --fips case super-resolve --dir ./case \
+    --input ./frames/frame_000100.png \
+    --input ./frames/frame_000101.png \
+    [...] \
+    --output sr-composite.png --scale 4 --fuse median \
+    --note "FAVIAU SR pipeline: 30 frames, 4x scale"
+
+# 4. Run the forensic clarify chain on the SR composite.
+lumen --fips case render --dir ./case \
+    --recipe ./forensic-recipe.json \
+    --input ./case/outputs/sr-composite.png \
+    --output cleaned.png --note "Forensic clarify chain"
+
+# 5. Reviewer (different identity) cross-checks and signs off.
+LUMEN_OPERATOR=~/.lumen/reviewer.json \
+lumen case sign-off --dir ./case --decision approve \
+    --note "Cross-checked SR registration vs original frames; \
+            no fabricated detail observed in plate region."
+
+# 6. Verify everything before export.
+lumen case audit --dir ./case --strict --require-fips --require-signoff
+
+# 7. Render reviewer-friendly HTML + tamper-evident bundle.
+lumen case report --dir ./case
+lumen case export --dir ./case --output EVD-1.lumenpkg.zip
+
+# 8. Receiving lab: single-command verification.
+lumen case verify-export --input ./EVD-1.lumenpkg.zip \
+    --require-signoff
+```
+
+Every step in this pipeline produces a signed audit entry. The shift
+report from step 3 is embedded in the signed note — a defense expert
+can read every per-frame (dx, dy, peak_score) without having to re-run
+the algorithm.
+
 ## What's still on the federal roadmap
 
 - **RFC 3161 timestamping** — third-party Time-Stamping Authority
@@ -137,10 +197,12 @@ of the analyst's output.
 - **C2PA manifest export** — adapter that emits a C2PA-compatible
   provenance manifest derived from the audit log, so Lumen output
   works in C2PA-aware viewers (Adobe, Microsoft, BBC, etc.).
-- **Multi-frame super-resolution** — sub-pixel registered fusion of
-  3-30 CCTV frames showing the same scene. This is the technique
-  FAVIAU uses to recover license plates from multi-frame video. The
-  building blocks (`lumen stack`) exist; the SR layer is in progress.
+- **Iterative back-projection refinement** — Keren-style IBP on top
+  of median fusion to recover even more detail. Median is robust;
+  IBP is sharper.
+- **Blind PSF estimation** — fit the actual PSF from observable
+  motion vectors / edge profile in the source rather than assuming
+  Gaussian sigma. Plug into Wiener / Richardson-Lucy.
 - **16-bit / 32-bit float export** — for evidence preservation
   (current pipeline runs 32-bit float internally; export is 8-bit).
 - **Threshold signatures (M-of-N)** — multiple operators must
