@@ -17,11 +17,13 @@
 #![warn(rust_2018_idioms)]
 
 pub mod curves;
+pub mod duotone;
 pub mod lut3d;
 pub mod primary_wheels;
 pub mod saturation;
 
 pub use curves::Curves;
+pub use duotone::Duotone;
 pub use lut3d::Lut3d;
 pub use primary_wheels::PrimaryWheels;
 pub use saturation::Saturation;
@@ -35,6 +37,7 @@ pub fn register_all(registry: &EffectRegistry) -> Result<()> {
     registry.register(Arc::new(Lut3d))?;
     registry.register(Arc::new(PrimaryWheels))?;
     registry.register(Arc::new(Curves))?;
+    registry.register(Arc::new(Duotone))?;
     Ok(())
 }
 

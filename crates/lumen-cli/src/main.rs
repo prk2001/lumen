@@ -12,6 +12,7 @@
 
 mod auto;
 mod clarify;
+mod colorize;
 mod presets;
 mod serve;
 mod smart;
@@ -185,6 +186,17 @@ enum Command {
         /// of running it.
         #[arg(long)] print_recipe: bool,
     },
+    /// Heuristic colorization — channel_isolate(luma) -> duotone with
+    /// a chosen palette, plus CLAHE + sharpen. No model required.
+    ///
+    /// Palettes: night, day, sepia, cyan-orange, noir.
+    Colorize {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// Palette name. Default: night.
+        #[arg(long, default_value = "night")] palette: String,
+        #[arg(long)] print_recipe: bool,
+    },
     /// Apply a stylistic preset chain (no input analysis).
     ///
     /// Available: pop, bw, vintage, sharpen, restore.
@@ -282,7 +294,34 @@ fn run(cli: Cli) -> Result<()> {
         Command::Style { input, output, name, print_recipe } => {
             cmd_style(&input, &output, &name, print_recipe)
         }
+        Command::Colorize { input, output, palette, print_recipe } => {
+            cmd_colorize(&input, &output, &palette, print_recipe)
+        }
     }
+}
+
+fn cmd_colorize(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    palette: &str,
+    print_recipe: bool,
+) -> Result<()> {
+    let recipe = colorize::build_heuristic_recipe(input, output, palette)?;
+    if print_recipe {
+        println!("{}", serde_json::to_string_pretty(&recipe)?);
+        return Ok(());
+    }
+    eprintln!(
+        "colorize (heuristic, palette={}, {} steps):",
+        palette,
+        recipe.chain.len()
+    );
+    for s in &recipe.chain {
+        eprintln!("  {} {}", s.effect, s.params);
+    }
+    run_chain_in_memory(&recipe)?;
+    println!("wrote {}", output.display());
+    Ok(())
 }
 
 fn cmd_style(

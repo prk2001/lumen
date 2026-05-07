@@ -402,6 +402,31 @@
     return buf;
   }
 
+  // duotone — luma-driven color map: shadows -> shadow_color,
+  // highlights -> highlight_color. The classic colorize-by-luminance
+  // technique. Mirrors lumen-fx-color.duotone.
+  //
+  // params:
+  //   shadow_r/g/b   colors of shadow regions (0..1 each)
+  //   highlight_r/g/b colors of highlight regions
+  //   amount         0..1 mix between original and duotone
+  function fxDuotone(buf, w, h, p) {
+    const sr = +p.shadow_r,    sg = +p.shadow_g,    sb = +p.shadow_b;
+    const hr = +p.highlight_r, hg = +p.highlight_g, hb = +p.highlight_b;
+    const amount = Math.max(0, Math.min(1, +p.amount));
+    if (amount === 0) return buf;
+    for (let i = 0; i < buf.length; i += 4) {
+      const y = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2];
+      const dr = sr + (hr - sr) * y;
+      const dg = sg + (hg - sg) * y;
+      const db = sb + (hb - sb) * y;
+      buf[i]     = Math.min(1, Math.max(0, buf[i]     * (1 - amount) + dr * amount));
+      buf[i + 1] = Math.min(1, Math.max(0, buf[i + 1] * (1 - amount) + dg * amount));
+      buf[i + 2] = Math.min(1, Math.max(0, buf[i + 2] * (1 - amount) + db * amount));
+    }
+    return buf;
+  }
+
   // channel_isolate — output one channel as gray.
   // Mirrors lumen-fx-modalities.channel_isolate.
   function fxChannelIsolate(buf, w, h, p) {
@@ -518,6 +543,20 @@
         { id: 'sigma_ratio', label: 'Sigma ratio', kind: 'float', min: 1.05,max: 5,   step: 0.05, default: 1.6 },
       ],
     },
+    {
+      id: 'lumen-fx-color.duotone',
+      label: 'Duotone (luma colorize)',
+      apply: fxDuotone,
+      params: [
+        { id: 'shadow_r',    label: 'Shadow R',    kind: 'float', min: 0, max: 1, step: 0.01, default: 0.04 },
+        { id: 'shadow_g',    label: 'Shadow G',    kind: 'float', min: 0, max: 1, step: 0.01, default: 0.07 },
+        { id: 'shadow_b',    label: 'Shadow B',    kind: 'float', min: 0, max: 1, step: 0.01, default: 0.18 },
+        { id: 'highlight_r', label: 'Highlight R', kind: 'float', min: 0, max: 1, step: 0.01, default: 0.95 },
+        { id: 'highlight_g', label: 'Highlight G', kind: 'float', min: 0, max: 1, step: 0.01, default: 0.78 },
+        { id: 'highlight_b', label: 'Highlight B', kind: 'float', min: 0, max: 1, step: 0.01, default: 0.42 },
+        { id: 'amount',      label: 'Amount',      kind: 'float', min: 0, max: 1, step: 0.01, default: 0.85 },
+      ],
+    },
   ];
 
   // Strength tiers for "Clarify (CCTV)" — mirrors clarify.rs in lumen-cli.
@@ -585,6 +624,38 @@
           { effect: 'lumen-fx-text.clahe',                   params: { tiles_x: 8, tiles_y: 8, clip_limit: 1.5 } },
           { effect: 'lumen-fx-color.saturation',             params: { amount: 1.10 } },
           { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 0.5, radius: 1.0, threshold: 0.0 } },
+        ];
+      case 'colorize-night':
+        // Heuristic "colorize a B&W or low-color night photo" — pull
+        // shadows toward navy and highlights toward warm amber, then
+        // restore some chroma from the original.
+        return [
+          { effect: 'lumen-fx-modalities.channel_isolate',
+            params: { channel: 'luma', invert: false } },
+          { effect: 'lumen-fx-color.duotone',
+            params: {
+              shadow_r: 0.04, shadow_g: 0.07, shadow_b: 0.20,
+              highlight_r: 0.96, highlight_g: 0.78, highlight_b: 0.40,
+              amount: 0.92,
+            } },
+          { effect: 'lumen-fx-text.clahe',
+            params: { tiles_x: 6, tiles_y: 6, clip_limit: 2.0 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',
+            params: { amount: 0.4, radius: 1.0, threshold: 0.0 } },
+        ];
+      case 'colorize-day':
+        // Lighter daylight palette — sky blue shadows, warm sand highlights.
+        return [
+          { effect: 'lumen-fx-modalities.channel_isolate',
+            params: { channel: 'luma', invert: false } },
+          { effect: 'lumen-fx-color.duotone',
+            params: {
+              shadow_r: 0.18, shadow_g: 0.30, shadow_b: 0.46,
+              highlight_r: 0.98, highlight_g: 0.92, highlight_b: 0.78,
+              amount: 0.85,
+            } },
+          { effect: 'lumen-fx-text.clahe',
+            params: { tiles_x: 6, tiles_y: 6, clip_limit: 1.5 } },
         ];
       default:
         return [];
