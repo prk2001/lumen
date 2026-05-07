@@ -1524,8 +1524,11 @@
     $('#demo-clarify')      && $('#demo-clarify').addEventListener('click', () => clarifyCctv(null));
     $('#demo-smart')        && $('#demo-smart').addEventListener('click', smartAuto);
     $('#demo-download')     && $('#demo-download').addEventListener('click', downloadOutput);
-    $('#demo-sample-cctv')  && $('#demo-sample-cctv').addEventListener('click', () => loadBuiltinSample('sample-cctv.jpg', 'CCTV sample'));
-    $('#demo-sample-photo') && $('#demo-sample-photo').addEventListener('click', () => loadBuiltinSample('sample.png',     'photo sample'));
+    document.querySelectorAll('[data-sample]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        loadBuiltinSample(btn.dataset.sample, btn.dataset.label || btn.dataset.sample);
+      });
+    });
 
     document.querySelectorAll('[data-style]').forEach(btn => {
       btn.addEventListener('click', () => {
