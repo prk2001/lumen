@@ -11,3 +11,10 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+serde = { workspace = true, optional = true }
+hound = "3.5"
+rustfft = "6.2"
+
+[features]
+default = []
+serde = ["dep:serde"]

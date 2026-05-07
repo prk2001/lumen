@@ -1,6 +1,6 @@
 [package]
 name = "lumen-ai"
-description = "ONNX Runtime inference, model registry, hardware EP routing"
+description = "ONNX inference (pure-Rust via tract), model session helpers, frame <-> tensor bridges"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,3 +11,8 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+ndarray = { workspace = true }
+tract-onnx = "0.21"
+
+[dev-dependencies]
+tempfile = "3"

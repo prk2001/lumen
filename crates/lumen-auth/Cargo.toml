@@ -11,3 +11,15 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+
+# Cat 22 — chain-of-custody manifest signing
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["std"] }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true, features = ["formatting", "parsing", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

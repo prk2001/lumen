@@ -11,3 +11,7 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+wgpu = "22"
+pollster = "0.3"
+bytemuck = { workspace = true }
+parking_lot = { workspace = true }

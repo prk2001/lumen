@@ -11,3 +11,5 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+mlua = { version = "0.10", features = ["lua54", "vendored", "send"] }
+parking_lot.workspace = true

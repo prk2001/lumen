@@ -26,8 +26,15 @@ lumen-fx-face = { path = "../lumen-fx-face" }
 lumen-fx-text = { path = "../lumen-fx-text" }
 lumen-fx-modalities = { path = "../lumen-fx-modalities" }
 lumen-measure = { path = "../lumen-measure" }
+lumen-audio = { path = "../lumen-audio" }
+lumen-auth = { path = "../lumen-auth" }
+lumen-report = { path = "../lumen-report" }
+lumen-export = { path = "../lumen-export" }
+lumen-api = { path = "../lumen-api" }
+lumen-qa = { path = "../lumen-qa" }
 tokio.workspace = true
 axum.workspace = true
+time = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -11,3 +11,13 @@ repository.workspace = true
 lumen-core = { path = "../lumen-core" }
 thiserror.workspace = true
 tracing.workspace = true
+# FFmpeg bindings — the build script uses pkg-config to locate the system
+# FFmpeg install. On macOS with Homebrew you may need to export
+# PKG_CONFIG_PATH=/usr/local/opt/ffmpeg/lib/pkgconfig (Intel) or
+# /opt/homebrew/opt/ffmpeg/lib/pkgconfig (Apple Silicon) before building.
+# Tested against system FFmpeg 8.x.
+ffmpeg-next = "8"
+
+[dev-dependencies]
+lumen-io = { path = "../lumen-io" }
+tempfile = "3.13"

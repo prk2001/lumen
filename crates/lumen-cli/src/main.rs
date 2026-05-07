@@ -98,6 +98,72 @@ enum Command {
         #[arg(long)]
         b: PathBuf,
     },
+    /// Spectral-subtraction noise reduction on a WAV file.
+    AudioNr {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 1024)]
+        frame_size: usize,
+        #[arg(long, default_value_t = 1.5)]
+        over_subtract: f32,
+        #[arg(long, default_value_t = 0.05)]
+        floor: f32,
+        #[arg(long, default_value_t = 0.5)]
+        noise_estimate_secs: f32,
+    },
+    /// Generate an Ed25519 keypair, write hex-encoded keys to stdout as JSON.
+    Keygen,
+    /// Build a chain-of-custody manifest, sign it, and write
+    /// `<output>.lumen-cco.json` next to the output file.
+    Sign {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        #[arg(long)] recipe: PathBuf,
+        /// Hex-encoded Ed25519 signing key (private). Use `lumen keygen` to mint.
+        #[arg(long)] secret_key_hex: String,
+    },
+    /// Verify a `*.lumen-cco.json` signed manifest against a public key.
+    Verify {
+        #[arg(long)] signed: PathBuf,
+        /// Hex-encoded Ed25519 public key. If omitted, the public key
+        /// embedded in the signed manifest is used (sanity check only).
+        #[arg(long)] public_key_hex: Option<String>,
+    },
+    /// Generate a self-contained HTML render report.
+    Report {
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        #[arg(long)] recipe: PathBuf,
+        #[arg(long, default_value = "Lumen Render Report")] title: String,
+        /// Output HTML path.
+        #[arg(long = "html-out")] html_out: PathBuf,
+    },
+    /// Encode a sequence of frames (one PNG per frame, sorted by filename)
+    /// into a video file via ffmpeg.
+    ExportVideo {
+        /// Directory of numbered PNG frames (e.g. frame_00001.png …).
+        #[arg(long)] frames_dir: PathBuf,
+        #[arg(long)] output: PathBuf,
+        #[arg(long, default_value = "h264")] codec: String,
+        #[arg(long, default_value_t = 24)] fps: u32,
+        #[arg(long)] crf: Option<u8>,
+    },
+    /// Run a Lua plugin against a still image.
+    Plugin {
+        #[arg(long)] plugin: PathBuf,
+        #[arg(long)] input: PathBuf,
+        #[arg(long)] output: PathBuf,
+        /// Repeated --param key=value (typed coercion).
+        #[arg(long = "param", value_name = "KEY=VALUE")]
+        params: Vec<String>,
+    },
+    /// Run a directory of golden-frame regression cases.
+    Qa {
+        /// Directory of `*.case.json` files.
+        #[arg(long)] cases: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -129,7 +195,247 @@ fn run(cli: Cli) -> Result<()> {
             rt.block_on(serve::run(recipe, port, jpeg_quality, registry))
         }
         Command::Measure { a, b } => cmd_measure(&a, &b),
+        Command::AudioNr { input, output, frame_size, over_subtract, floor, noise_estimate_secs } => {
+            cmd_audio_nr(&input, &output, frame_size, over_subtract, floor, noise_estimate_secs)
+        }
+        Command::Keygen => cmd_keygen(),
+        Command::Sign { input, output, recipe, secret_key_hex } => {
+            cmd_sign(&input, &output, &recipe, &secret_key_hex)
+        }
+        Command::Verify { signed, public_key_hex } => cmd_verify(&signed, public_key_hex.as_deref()),
+        Command::Report { input, output, recipe, title, html_out } => {
+            cmd_report(&input, &output, &recipe, &title, &html_out)
+        }
+        Command::ExportVideo { frames_dir, output, codec, fps, crf } => {
+            cmd_export_video(&frames_dir, &output, &codec, fps, crf)
+        }
+        Command::Plugin { plugin, input, output, params } => {
+            cmd_plugin(&plugin, &input, &output, &params)
+        }
+        Command::Qa { cases } => cmd_qa(&cases),
     }
+}
+
+// ─── New subcommands ─────────────────────────────────────────────────────
+
+fn cmd_audio_nr(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    frame_size: usize,
+    over_subtract: f32,
+    floor: f32,
+    noise_estimate_secs: f32,
+) -> Result<()> {
+    use lumen_audio::{read_wav, spectral_subtract, write_wav, SpectralNrParams};
+    let buf = read_wav(input).map_err(|e| anyhow!("read wav: {e}"))?;
+    let params = SpectralNrParams { frame_size, over_subtract, floor, noise_estimate_secs };
+    let cleaned = spectral_subtract(&buf, &params).map_err(|e| anyhow!("spectral_subtract: {e}"))?;
+    write_wav(&cleaned, output).map_err(|e| anyhow!("write wav: {e}"))?;
+    println!("wrote {}", output.display());
+    Ok(())
+}
+
+fn cmd_keygen() -> Result<()> {
+    let (sk, vk) = lumen_auth::keypair_generate();
+    let json = serde_json::json!({
+        "secret_key_hex": hex_encode(sk.to_bytes().as_ref()),
+        "public_key_hex": hex_encode(vk.to_bytes().as_ref()),
+    });
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
+fn cmd_sign(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    recipe: &std::path::Path,
+    secret_key_hex: &str,
+) -> Result<()> {
+    let manifest = lumen_auth::build_manifest(input, output, recipe)
+        .map_err(|e| anyhow!("build_manifest: {e}"))?;
+    let bytes = hex_decode(secret_key_hex)
+        .ok_or_else(|| anyhow!("--secret-key-hex must be 64 hex chars (32 bytes)"))?;
+    if bytes.len() != 32 {
+        anyhow::bail!("expected 32-byte signing key, got {} bytes", bytes.len());
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    let signing_key = lumen_auth::SigningKey::from_bytes(&arr);
+    let signature = lumen_auth::sign(&manifest, &signing_key);
+    let signed = lumen_auth::SignedManifest {
+        manifest,
+        signature_hex: hex_encode(signature.to_bytes().as_ref()),
+        public_key_hex: hex_encode(signing_key.verifying_key().to_bytes().as_ref()),
+    };
+    let mut sidecar = output.to_path_buf();
+    sidecar.set_extension("lumen-cco.json");
+    lumen_auth::save_signed(&signed, &sidecar).map_err(|e| anyhow!("save_signed: {e}"))?;
+    println!("wrote {}", sidecar.display());
+    Ok(())
+}
+
+fn cmd_verify(signed: &std::path::Path, public_key_hex: Option<&str>) -> Result<()> {
+    let pkg = lumen_auth::load_signed(signed).map_err(|e| anyhow!("load_signed: {e}"))?;
+    let pk_hex = public_key_hex.unwrap_or(&pkg.public_key_hex);
+    let pk_bytes = hex_decode(pk_hex)
+        .ok_or_else(|| anyhow!("--public-key-hex must be 64 hex chars (32 bytes)"))?;
+    if pk_bytes.len() != 32 {
+        anyhow::bail!("expected 32-byte public key, got {} bytes", pk_bytes.len());
+    }
+    let mut pk_arr = [0u8; 32];
+    pk_arr.copy_from_slice(&pk_bytes);
+    let verifying_key = lumen_auth::VerifyingKey::from_bytes(&pk_arr)
+        .map_err(|e| anyhow!("invalid public key: {e}"))?;
+    let sig_bytes = hex_decode(&pkg.signature_hex)
+        .ok_or_else(|| anyhow!("malformed signature hex in signed manifest"))?;
+    if sig_bytes.len() != 64 {
+        anyhow::bail!("expected 64-byte signature, got {} bytes", sig_bytes.len());
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(&sig_bytes);
+    let signature = lumen_auth::Signature::from_bytes(&sig_arr);
+    let ok = lumen_auth::verify(&pkg.manifest, &signature, &verifying_key);
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "verified": ok,
+        "manifest": pkg.manifest,
+    }))?);
+    if !ok { anyhow::bail!("signature verification failed"); }
+    Ok(())
+}
+
+fn cmd_report(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    recipe: &std::path::Path,
+    title: &str,
+    html_out: &std::path::Path,
+) -> Result<()> {
+    let recipe_str = std::fs::read_to_string(recipe).context("read recipe")?;
+    let frame_a = decode_image(input).map_err(|e| anyhow!("decode input: {e}"))?;
+    let frame_b = decode_image(output).map_err(|e| anyhow!("decode output: {e}"))?;
+    let metrics = lumen_measure::all_metrics(&frame_a, &frame_b)
+        .map_err(|e| anyhow!("metrics: {e}"))?;
+    let in_hash = lumen_io::hash_file(input).ok();
+    let out_hash = lumen_io::hash_file(output).ok();
+    let report = lumen_report::ReportInput {
+        title,
+        generated_at: time::OffsetDateTime::now_utc(),
+        input_path: input,
+        output_path: output,
+        recipe_json: Some(recipe_str.as_str()),
+        mse: Some(metrics.mse),
+        psnr: if metrics.psnr.is_finite() { Some(metrics.psnr) } else { None },
+        ssim: Some(metrics.ssim),
+        input_hash: in_hash.as_deref(),
+        output_hash: out_hash.as_deref(),
+        render_ms: None,
+        software_version: env!("CARGO_PKG_VERSION"),
+    };
+    lumen_report::save_html(&report, html_out).map_err(|e| anyhow!("save_html: {e}"))?;
+    println!("wrote {}", html_out.display());
+    Ok(())
+}
+
+fn cmd_export_video(
+    frames_dir: &std::path::Path,
+    output: &std::path::Path,
+    codec: &str,
+    fps: u32,
+    crf: Option<u8>,
+) -> Result<()> {
+    use lumen_export::{Codec, VideoEncoder, VideoEncoderOptions};
+    let codec = match codec.to_ascii_lowercase().as_str() {
+        "h264" => Codec::H264,
+        "h265" | "hevc" => Codec::H265,
+        "prores" | "prores422" => Codec::ProRes422,
+        other => anyhow::bail!("unknown codec: {other} (h264|h265|prores)"),
+    };
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(frames_dir)
+        .with_context(|| format!("read_dir {}", frames_dir.display()))?
+        .filter_map(|r| r.ok().map(|e| e.path()))
+        .filter(|p| p.is_file())
+        .collect();
+    entries.sort();
+    if entries.is_empty() { anyhow::bail!("no frames found in {}", frames_dir.display()); }
+
+    let first = decode_image(&entries[0]).map_err(|e| anyhow!("decode first frame: {e}"))?;
+    let opts = VideoEncoderOptions::new(
+        codec,
+        first.width,
+        first.height,
+        lumen_core::Rational::new(fps as i64, 1),
+    );
+    let opts = match crf {
+        Some(c) => VideoEncoderOptions { crf: Some(c), ..opts },
+        None => opts,
+    };
+    let mut enc = VideoEncoder::open(output, opts).map_err(|e| anyhow!("encoder open: {e}"))?;
+    enc.write_frame(&first).map_err(|e| anyhow!("encode frame 0: {e}"))?;
+    for (i, p) in entries.iter().enumerate().skip(1) {
+        let f = decode_image(p).map_err(|e| anyhow!("decode {}: {e}", p.display()))?;
+        enc.write_frame(&f).map_err(|e| anyhow!("encode frame {i}: {e}"))?;
+    }
+    enc.finish().map_err(|e| anyhow!("encoder finish: {e}"))?;
+    println!("wrote {} ({} frames)", output.display(), entries.len());
+    Ok(())
+}
+
+fn cmd_plugin(
+    plugin: &std::path::Path,
+    input: &std::path::Path,
+    output: &std::path::Path,
+    raw_params: &[String],
+) -> Result<()> {
+    use lumen_core::Effect;
+    let p = lumen_api::load_lua_plugin(plugin).map_err(|e| anyhow!("load plugin: {e}"))?;
+    let mut params = ParamValues::new();
+    for kv in raw_params {
+        let (k, v) = kv.split_once('=').ok_or_else(|| anyhow!("--param '{kv}' missing '='"))?;
+        params.insert(k, parse_param_value(v));
+    }
+    params.validate_and_fill(p.parameters())
+        .map_err(|e| anyhow!("parameter validation: {e}"))?;
+    let frame = decode_image(input).map_err(|e| anyhow!("decode: {e}"))?;
+    let mut ctx = Context::for_still_srgb();
+    let out = p.apply(&mut ctx, frame, &params).map_err(|e| anyhow!("plugin apply: {e}"))?;
+    encode_image(out, output, ImageEncodeOptions::default())
+        .map_err(|e| anyhow!("encode: {e}"))?;
+    println!("wrote {}", output.display());
+    Ok(())
+}
+
+fn cmd_qa(cases_dir: &std::path::Path) -> Result<()> {
+    let set = lumen_qa::GoldenSet::from_dir(cases_dir)
+        .map_err(|e| anyhow!("from_dir: {e}"))?;
+    let registry = build_registry()?;
+    let results = lumen_qa::GoldenSet::run_all(&set, &registry);
+    let total = results.len();
+    let passed = results.iter().filter(|r| r.passed).count();
+    println!("{}", serde_json::to_string_pretty(&results)?);
+    if passed == total {
+        println!("OK: {passed}/{total} cases passed");
+        Ok(())
+    } else {
+        anyhow::bail!("FAIL: {passed}/{total} cases passed")
+    }
+}
+
+// ─── Hex helpers ─────────────────────────────────────────────────────────
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) { return None; }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+        .collect()
 }
 
 fn cmd_measure(a: &std::path::Path, b: &std::path::Path) -> Result<()> {
