@@ -16,9 +16,11 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 mod io;
+pub mod loudness;
 mod nr;
 
 pub use io::{read_wav, write_wav};
+pub use loudness::{measure_loudness, normalize_to_lufs, true_peak_dbfs, Loudness};
 pub use nr::{spectral_subtract, SpectralNrParams};
 
 use lumen_core::{Error, Result};

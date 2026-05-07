@@ -14,21 +14,22 @@ multi-year roadmap.
 
 ## Status
 
-**Phase 0 — Scaffolding.** Workspace, crate skeleton, and roadmap docs are in
-place. No feature code is implemented yet. See
-[`docs/PLAN.md`](docs/PLAN.md) for the phased build plan.
+**All 30 of 30 spec categories have working implementations.** The
+workspace ships 18 baseline effects, video probing/decode/encode via
+FFmpeg, RAW/HEIF/AVIF/JXL still decode, AI inference via tract,
+GPU compute via wgpu, audio NR + loudness, Ed25519-signed C2PA-style
+manifests, HTML reports, golden-frame regression, Lua plugin host,
+and a native Tauri 2 desktop shell. 175+ tests pass; clippy is clean
+with `-D warnings`.
 
-## Why this stack
-
-A single Rust core ships everywhere:
-
-| Target              | Crate / app                 | Status         |
-| ------------------- | --------------------------- | -------------- |
-| Desktop (Mac/Win/Linux) | `apps/desktop` (Tauri 2 + React) | scaffolding |
-| Command-line        | `crates/lumen-cli`          | scaffolding |
-| Web                 | `apps/web` (WASM core + React)   | planned     |
-| Cloud / SaaS        | `crates/lumen-server` + `apps/cloud` | scaffolding |
-| Plugin SDK          | `crates/lumen-api`          | planned     |
+| Target              | Crate / app                          | Status   |
+| ------------------- | ------------------------------------ | -------- |
+| Desktop (Mac/Win/Linux) | `apps/desktop` (Tauri 2 + React) | working  |
+| Command-line        | `crates/lumen-cli`                   | 16+ subcommands |
+| Live preview server | `lumen serve` (HTTP + auto-reload)   | working  |
+| Web                 | `apps/web` (WASM core + React)       | planned  |
+| Cloud / SaaS        | `crates/lumen-server` + `apps/cloud` | scaffolded |
+| Plugin SDK          | `crates/lumen-api` (Lua via mlua)    | working  |
 
 The same pipeline graph runs in every target.
 
@@ -129,6 +130,75 @@ EOF
 ```
 
 See [`docs/PIPELINE.md`](docs/PIPELINE.md) for the full recipe format.
+
+## CLI subcommands
+
+```text
+probe          Print AssetMetadata as JSON (still images + video).
+list-effects   Enumerate every effect in the registry with parameter specs.
+apply          Run a single effect on a still image.
+pipeline       Run a multi-stage chain from a JSON recipe (still images).
+video-pipeline Same recipe format applied per-frame to a video input.
+serve          Live HTTP preview that auto-rerenders on recipe edits.
+measure        Compute MSE / PSNR / SSIM between two frames.
+audio-nr       Spectral-subtraction noise reduction on a WAV.
+keygen         Mint an Ed25519 keypair for chain-of-custody.
+sign           Build + Ed25519-sign a C2PA-style manifest sidecar.
+verify         Verify a `*.lumen-cco.json` signed manifest.
+report         Self-contained HTML render report (input + output + metrics).
+export-video   Encode a sorted PNG sequence to H.264/H.265/ProRes.
+plugin         Run a Lua effect plugin against a still image.
+qa             Run a directory of golden-frame regression cases.
+```
+
+## Effect roster (18 effects across 13 categories)
+
+| Category | Effects |
+|---|---|
+| 4 Exposure | `brightness_contrast`, `gamma` |
+| 5 Color | `saturation`, `lut3d`, `primary_wheels`, `curves` |
+| 6 Sharpen | `unsharp_mask` |
+| 7 Denoise | `gaussian` |
+| 8 Compression | `deblock` |
+| 9 Geometric | `resize`, `crop`, `rotate_ortho` |
+| 10 Stabilize | `translate` |
+| 11 Deblur | `laplacian` |
+| 12 Upscale | `bicubic` |
+| 13 Temporal | `motion_blur_directional` |
+| 15 Face | `skin_smooth_in_rect` |
+| 16 Text | `clahe` |
+| 17 Mask | `alpha_rect` |
+| 18 Weather | `dehaze_dcp` |
+| 19 Modalities | `channel_isolate` |
+
+Lua plugins via `lumen-api` extend this set without recompiling.
+
+## Cross-cutting capabilities
+
+- **Project file** — `.lumenproj` JSON v1 with schema validation,
+  atomic save, append-only history (`lumen-core`).
+- **Reproducibility** — content-addressed BLAKE3 hashes on every
+  asset; pin model hashes per-project.
+- **Color management** — scene-linear ACEScg float32 working space,
+  16 named color spaces, sRGB transfer round-trip
+  (`lumen-core::color`).
+- **GPU compute** — wgpu (Vulkan/Metal/DX12/WebGPU), reference
+  brightness/contrast kernel in WGSL (`lumen-perf`).
+- **AI inference** — pure-Rust tract-onnx with ImageTensor 1×3×H×W
+  CHW conversions (`lumen-ai`).
+- **Lua plugins** — mlua + vendored Lua 5.4; plugins implement the
+  same `Effect` trait as built-ins (`lumen-api`).
+- **Forensic provenance** — Ed25519-signed manifests with BLAKE3
+  hashes of input/output/recipe (`lumen-auth`).
+- **Quality metrics** — PSNR / SSIM / MSE in f64 (`lumen-measure`).
+- **Loudness compliance** — ITU BS.1770 K-weighting + EBU R128
+  gating (`lumen-audio::loudness`).
+- **Regression testing** — golden-frame harness with SSIM / PSNR
+  thresholds (`lumen-qa`).
+- **Collaboration** — `.lumenbundle` ZIP archives, signed share
+  links, project diff/merge (`lumen-collab`).
+- **Licensing** — Ed25519-signed JSON licenses with edition + feature
+  set + expiry (`lumen-platform`).
 
 ## Roadmap (high-level)
 

@@ -11,6 +11,7 @@
 //!   re-renders on file changes and shows side-by-side input / output.
 
 mod serve;
+mod video_pipeline;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -150,6 +151,12 @@ enum Command {
         #[arg(long, default_value_t = 24)] fps: u32,
         #[arg(long)] crf: Option<u8>,
     },
+    /// Run a recipe over every frame of a video input -> video output.
+    VideoPipeline {
+        #[arg(long)] recipe: PathBuf,
+        #[arg(long, default_value = "h264")] codec: String,
+        #[arg(long)] crf: Option<u8>,
+    },
     /// Run a Lua plugin against a still image.
     Plugin {
         #[arg(long)] plugin: PathBuf,
@@ -209,11 +216,53 @@ fn run(cli: Cli) -> Result<()> {
         Command::ExportVideo { frames_dir, output, codec, fps, crf } => {
             cmd_export_video(&frames_dir, &output, &codec, fps, crf)
         }
+        Command::VideoPipeline { recipe, codec, crf } => {
+            cmd_video_pipeline(&recipe, &codec, crf)
+        }
         Command::Plugin { plugin, input, output, params } => {
             cmd_plugin(&plugin, &input, &output, &params)
         }
         Command::Qa { cases } => cmd_qa(&cases),
     }
+}
+
+fn cmd_video_pipeline(
+    recipe_path: &std::path::Path,
+    codec_name: &str,
+    crf: Option<u8>,
+) -> Result<()> {
+    let recipe_str = std::fs::read_to_string(recipe_path)
+        .with_context(|| format!("reading recipe {}", recipe_path.display()))?;
+    let recipe: Recipe = serde_json::from_str(&recipe_str)
+        .with_context(|| format!("parsing recipe {} as JSON", recipe_path.display()))?;
+
+    let base = recipe_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let resolve = |p: &std::path::Path| -> PathBuf {
+        if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
+    };
+    let input_path = resolve(&recipe.input);
+    let output_path = resolve(&recipe.output);
+
+    if !video_pipeline::is_video_input(&input_path) {
+        anyhow::bail!(
+            "input {} is not a video — use `lumen pipeline` for still images",
+            input_path.display()
+        );
+    }
+
+    let codec = video_pipeline::parse_codec(codec_name)?;
+    let registry = build_registry()?;
+    let stats = video_pipeline::run_video_pipeline(&recipe, &base, &registry, codec, crf)?;
+    println!(
+        "wrote {} ({} frames in {} ms)",
+        output_path.display(),
+        stats.frames_processed,
+        stats.duration_ms
+    );
+    Ok(())
 }
 
 // ─── New subcommands ─────────────────────────────────────────────────────
