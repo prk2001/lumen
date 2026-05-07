@@ -242,21 +242,85 @@
 
   /* Live demo */
   #demo .lead { margin-bottom: 32px; }
-  .demo-stage {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+
+  /* A/B compare stage */
+  .compare-stage {
     background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px;
+    padding: 14px;
   }
-  .demo-frame {
+  .compare-cap {
+    display: flex; align-items: center; gap: 12px;
+    padding: 4px 6px 12px;
+  }
+  .compare-cap .badge-in, .compare-cap .badge-out {
+    font: 11px/1 ui-monospace, monospace;
+    text-transform: uppercase; letter-spacing: 0.10em;
+    padding: 5px 10px; border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+  .compare-cap .badge-in {
+    background: var(--code-bg); color: var(--dim);
+  }
+  .compare-cap .badge-out {
+    background: rgba(214,168,84,0.10); color: var(--accent-2);
+    border-color: rgba(214,168,84,0.3);
+  }
+  .compare-pane {
+    position: relative;
+    aspect-ratio: 640 / 420;
+    border: 1px solid var(--border); border-radius: 8px;
+    overflow: hidden;
     background:
       repeating-conic-gradient(#1d2027 0% 25%, #161920 0% 50%) 0 0 / 14px 14px;
-    border: 1px solid var(--border); border-radius: 8px;
-    aspect-ratio: 640 / 420;
-    display: flex; align-items: center; justify-content: center;
-    overflow: hidden;
+    user-select: none;
+    touch-action: none;
   }
-  .demo-frame canvas { max-width: 100%; max-height: 100%; display: block; image-rendering: -webkit-optimize-contrast; }
-  .demo-cap { font: 11px/1 ui-monospace, monospace; color: var(--dim); padding: 8px 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .compare-pane .cmp-canvas {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    max-width: 100%; max-height: 100%;
+    image-rendering: -webkit-optimize-contrast;
+  }
+  /* Input is the BOTTOM layer; output is on top, clipped to the right of the divider */
+  .compare-pane .cmp-input  { z-index: 1; }
+  .compare-pane .cmp-output { z-index: 2; clip-path: inset(0 0 0 var(--ab-pos, 0%)); }
+  .compare-pane .ab-divider {
+    position: absolute; top: 0; bottom: 0;
+    left: var(--ab-pos, 0%);
+    width: 2px;
+    margin-left: -1px;
+    z-index: 3;
+    pointer-events: auto;
+  }
+  .compare-pane .ab-line {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    width: 2px; background: var(--accent);
+    box-shadow: 0 0 12px rgba(214,168,84,0.6);
+    pointer-events: none;
+  }
+  .compare-pane .ab-handle {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent); color: #1a1408;
+    display: grid; place-items: center;
+    font-weight: 700; font-size: 16px;
+    cursor: col-resize;
+    box-shadow: 0 0 0 2px rgba(214,168,84,0.30), 0 6px 18px rgba(0,0,0,0.5);
+    transition: transform .12s, box-shadow .12s;
+  }
+  .compare-pane .ab-handle:hover {
+    transform: translate(-50%, -50%) scale(1.06);
+    box-shadow: 0 0 0 4px rgba(214,168,84,0.30), 0 6px 22px rgba(0,0,0,0.5);
+  }
+  .compare-pane .ab-divider:active .ab-handle {
+    transform: translate(-50%, -50%) scale(0.95);
+  }
+  .compare-pane.drop-hover {
+    outline: 2px dashed var(--accent);
+    outline-offset: -8px;
+  }
 
   .chain-strip {
     display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
@@ -464,14 +528,19 @@
       watch the output update in real time.
     </p>
 
-    <div class="demo-stage">
-      <div>
-        <div class="demo-cap">Input · drop an image here, or use the file picker below</div>
-        <div class="demo-frame"><canvas id="demo-input"></canvas></div>
+    <div class="compare-stage">
+      <div class="compare-cap">
+        <span class="badge-in">Before</span>
+        <span style="flex:1; text-align:center; color:var(--dim); font-size:11px;">drag the divider to compare · drop any image here · upload below</span>
+        <span class="badge-out">After</span>
       </div>
-      <div>
-        <div class="demo-cap">Output</div>
-        <div class="demo-frame"><canvas id="demo-output"></canvas></div>
+      <div class="compare-pane" id="demo-compare-pane">
+        <canvas id="demo-input"  class="cmp-canvas cmp-input"></canvas>
+        <canvas id="demo-output" class="cmp-canvas cmp-output"></canvas>
+        <div class="ab-divider" id="demo-ab-divider">
+          <div class="ab-line"></div>
+          <div class="ab-handle" title="Drag left/right to compare">⇔</div>
+        </div>
       </div>
     </div>
 
@@ -502,6 +571,14 @@
         <b style="color:var(--accent);">Smart Auto</b>: one click — Lumen analyzes the input and picks
         Auto-Enhance for normal photos, Clarify for blurry / hazy / CCTV stills.
       </span>
+    </div>
+    <div class="auto-row" style="margin-top:8px;">
+      <span style="font-size:12px;color:var(--dim);">Stylistic presets:</span>
+      <button class="btn small" type="button" data-style="pop"     data-label="Pop · vivid colors">✦ Pop</button>
+      <button class="btn small" type="button" data-style="bw"      data-label="Black &amp; White">⬛ B&amp;W</button>
+      <button class="btn small" type="button" data-style="vintage" data-label="Vintage · soft warm">📼 Vintage</button>
+      <button class="btn small" type="button" data-style="sharpen" data-label="Sharpen only">⚞ Sharpen</button>
+      <button class="btn small" type="button" data-style="restore" data-label="Photo restore">⌬ Restore</button>
     </div>
 
     <div id="demo-stats"></div>

@@ -552,6 +552,57 @@
     ];
   }
 
+  // Stylistic presets — each is a chain of existing effects.
+  function buildStyleChain(name) {
+    switch (name) {
+      case 'pop':
+        return [
+          { effect: 'lumen-fx-color.saturation',             params: { amount: 1.35 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 1.0, radius: 1.0, threshold: 0.0 } },
+          { effect: 'lumen-fx-exposure.brightness_contrast', params: { brightness: 0.02, contrast: 1.1 } },
+        ];
+      case 'bw':
+        return [
+          { effect: 'lumen-fx-modalities.channel_isolate',   params: { channel: 'luma', invert: false } },
+          { effect: 'lumen-fx-exposure.brightness_contrast', params: { brightness: 0.0, contrast: 1.08 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 0.5, radius: 1.0, threshold: 0.0 } },
+        ];
+      case 'vintage':
+        return [
+          { effect: 'lumen-fx-color.saturation',             params: { amount: 0.78 } },
+          { effect: 'lumen-fx-exposure.gamma',               params: { gamma: 1.08 } },
+          { effect: 'lumen-fx-exposure.brightness_contrast', params: { brightness: 0.02, contrast: 0.92 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 0.3, radius: 1.4, threshold: 0.02 } },
+        ];
+      case 'sharpen':
+        return [
+          { effect: 'lumen-fx-deblur.laplacian',             params: { amount: 0.8, sigma: 0.8, sigma_ratio: 1.6 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 1.2, radius: 0.9, threshold: 0.0 } },
+        ];
+      case 'restore':
+        return [
+          { effect: 'lumen-fx-denoise.gaussian',             params: { sigma: 0.6 } },
+          { effect: 'lumen-fx-text.clahe',                   params: { tiles_x: 8, tiles_y: 8, clip_limit: 1.5 } },
+          { effect: 'lumen-fx-color.saturation',             params: { amount: 1.10 } },
+          { effect: 'lumen-fx-sharpen.unsharp_mask',         params: { amount: 0.5, radius: 1.0, threshold: 0.0 } },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  function applyStylePreset(name, label) {
+    if (!baseImageData) return;
+    chain = buildStyleChain(name);
+    activeStep = 0;
+    const panel = $('#demo-stats');
+    if (panel) {
+      panel.style.display = 'flex';
+      panel.innerHTML = `<span><b>preset</b> ${label || name}</span><span><b>steps</b> ${chain.length}</span>`;
+    }
+    refreshAll();
+  }
+
   function defaultParams(eff) {
     const p = {};
     for (const spec of eff.params) p[spec.id] = spec.default;
@@ -962,6 +1013,7 @@
       [inputCanvas, outputCanvas].forEach(c => { c.width = baseW; c.height = baseH; });
       inputCtx.drawImage(img, 0, 0);
       baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+      syncCompareAspect();
       const stamp = $('#demo-render-time');
       if (stamp) stamp.textContent = `Loaded ${captionLabel} (${baseW}×${baseH}). Click Smart Auto to see Lumen analyze + clarify.`;
       refreshAll();
@@ -1022,6 +1074,7 @@
         [inputCanvas, outputCanvas].forEach(c => { c.width = baseW; c.height = baseH; });
         inputCtx.drawImage(img, 0, 0, baseW, baseH);
         baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+        syncCompareAspect();
         const stamp = $('#demo-render-time');
         if (stamp) stamp.textContent = `Loaded ${file.name} (${baseW}×${baseH})`;
         refreshAll();
@@ -1035,6 +1088,53 @@
     reader.readAsDataURL(file);
   }
 
+  // ─── A/B compare slider ─────────────────────────────────────────────
+  function setupAbSlider() {
+    const pane = $('#demo-compare-pane');
+    const divider = $('#demo-ab-divider');
+    if (!pane || !divider) return;
+
+    function setPos(pct) {
+      const p = Math.max(0, Math.min(100, pct));
+      pane.style.setProperty('--ab-pos', p + '%');
+    }
+    setPos(50);
+
+    let dragging = false;
+    function onMove(clientX) {
+      const rect = pane.getBoundingClientRect();
+      setPos(((clientX - rect.left) / rect.width) * 100);
+    }
+    divider.addEventListener('mousedown', (e) => {
+      dragging = true;
+      e.preventDefault();
+    });
+    pane.addEventListener('mousedown', (e) => {
+      // Click-and-drag anywhere on the pane (except handle) starts a drag.
+      if (e.target === pane.querySelector('.cmp-canvas') || e.target === pane) {
+        dragging = true;
+        onMove(e.clientX);
+      }
+    });
+    document.addEventListener('mousemove', (e) => { if (dragging) onMove(e.clientX); });
+    document.addEventListener('mouseup',   () => { dragging = false; });
+    divider.addEventListener('touchstart', (e) => {
+      dragging = true;
+      e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('touchmove', (e) => {
+      if (dragging && e.touches[0]) onMove(e.touches[0].clientX);
+    }, { passive: false });
+    document.addEventListener('touchend', () => { dragging = false; });
+  }
+
+  // Match the compare-pane's aspect-ratio to the loaded image, so the
+  // divider math stays correct for any source.
+  function syncCompareAspect() {
+    const pane = $('#demo-compare-pane');
+    if (pane && baseW && baseH) pane.style.aspectRatio = `${baseW} / ${baseH}`;
+  }
+
   // ─── Init ───────────────────────────────────────────────────────────
   function init() {
     inputCanvas  = $('#demo-input');
@@ -1042,6 +1142,7 @@
     if (!inputCanvas || !outputCanvas) return;
     inputCtx  = inputCanvas.getContext('2d');
     outputCtx = outputCanvas.getContext('2d');
+    setupAbSlider();
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -1054,6 +1155,7 @@
       });
       inputCtx.drawImage(img, 0, 0);
       baseImageData = inputCtx.getImageData(0, 0, baseW, baseH);
+      syncCompareAspect();
       refreshAll();
     };
     img.onerror = () => {
@@ -1072,6 +1174,12 @@
     $('#demo-sample-cctv')  && $('#demo-sample-cctv').addEventListener('click', () => loadBuiltinSample('sample-cctv.jpg', 'CCTV sample'));
     $('#demo-sample-photo') && $('#demo-sample-photo').addEventListener('click', () => loadBuiltinSample('sample.png',     'photo sample'));
 
+    document.querySelectorAll('[data-style]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        applyStylePreset(btn.dataset.style, btn.dataset.label);
+      });
+    });
+
     const fileInput = $('#demo-file');
     if (fileInput) {
       fileInput.addEventListener('change', () => {
@@ -1080,8 +1188,8 @@
       });
     }
 
-    // Drag-and-drop on the input frame.
-    const dropZone = inputCanvas.parentElement;
+    // Drag-and-drop on the compare pane.
+    const dropZone = $('#demo-compare-pane');
     if (dropZone) {
       ['dragenter', 'dragover'].forEach(ev => dropZone.addEventListener(ev, e => {
         e.preventDefault(); e.stopPropagation(); dropZone.classList.add('drop-hover');
