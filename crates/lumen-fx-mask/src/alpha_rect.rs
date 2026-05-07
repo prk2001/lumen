@@ -27,49 +27,81 @@ const PARAMS: &[ParamSpec] = &[
         id: "x",
         display_name: "X",
         description: "Mask rect left edge in pixels.",
-        kind: ParamKind::Int { default: 0, min: Some(0), max: None },
+        kind: ParamKind::Int {
+            default: 0,
+            min: Some(0),
+            max: None,
+        },
     },
     ParamSpec {
         id: "y",
         display_name: "Y",
         description: "Mask rect top edge in pixels.",
-        kind: ParamKind::Int { default: 0, min: Some(0), max: None },
+        kind: ParamKind::Int {
+            default: 0,
+            min: Some(0),
+            max: None,
+        },
     },
     ParamSpec {
         id: "width",
         display_name: "Width",
         description: "Mask rect width in pixels.",
-        kind: ParamKind::Int { default: 0, min: Some(1), max: None },
+        kind: ParamKind::Int {
+            default: 0,
+            min: Some(1),
+            max: None,
+        },
     },
     ParamSpec {
         id: "height",
         display_name: "Height",
         description: "Mask rect height in pixels.",
-        kind: ParamKind::Int { default: 0, min: Some(1), max: None },
+        kind: ParamKind::Int {
+            default: 0,
+            min: Some(1),
+            max: None,
+        },
     },
     ParamSpec {
         id: "inside",
         display_name: "Inside α",
         description: "Alpha multiplier inside the rect (0..1).",
-        kind: ParamKind::Float { default: 1.0, min: Some(0.0), max: Some(1.0) },
+        kind: ParamKind::Float {
+            default: 1.0,
+            min: Some(0.0),
+            max: Some(1.0),
+        },
     },
     ParamSpec {
         id: "outside",
         display_name: "Outside α",
         description: "Alpha multiplier outside the rect (0..1).",
-        kind: ParamKind::Float { default: 0.0, min: Some(0.0), max: Some(1.0) },
+        kind: ParamKind::Float {
+            default: 0.0,
+            min: Some(0.0),
+            max: Some(1.0),
+        },
     },
     ParamSpec {
         id: "feather",
         display_name: "Feather",
         description: "Linear-ramp width in pixels at each edge.",
-        kind: ParamKind::Float { default: 0.0, min: Some(0.0), max: Some(512.0) },
+        kind: ParamKind::Float {
+            default: 0.0,
+            min: Some(0.0),
+            max: Some(512.0),
+        },
     },
 ];
 
 impl Effect for AlphaRect {
-    fn metadata(&self) -> &EffectMetadata { &META }
-    fn parameters(&self) -> &[ParamSpec] { PARAMS }
+    fn metadata(&self) -> &EffectMetadata {
+        &META
+    }
+    fn parameters(&self) -> &[ParamSpec] {
+        PARAMS
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             deterministic: true,
@@ -152,11 +184,18 @@ mod tests {
         p.insert("feather", ParamValue::Float(0.0));
         p.validate_and_fill(m.parameters()).unwrap();
 
-        let f =
-            Frame::new(6, 6, PixelData::Rgba8(vec![255; 6 * 6 * 4]), ColorSpace::SRgb, None)
-                .unwrap();
+        let f = Frame::new(
+            6,
+            6,
+            PixelData::Rgba8(vec![255; 6 * 6 * 4]),
+            ColorSpace::SRgb,
+            None,
+        )
+        .unwrap();
         let out = m.apply(&mut ctx, f, &p).unwrap().into_rgba_u8_srgb();
-        let PixelData::Rgba8(px) = out.data else { panic!() };
+        let PixelData::Rgba8(px) = out.data else {
+            panic!()
+        };
         // Center 2x2 alpha = 255; everywhere else alpha = 0.
         for y in 0..6 {
             for x in 0..6 {

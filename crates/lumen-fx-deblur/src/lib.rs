@@ -10,8 +10,10 @@
 #![warn(rust_2018_idioms)]
 
 pub mod laplacian;
+pub mod wiener;
 
 pub use laplacian::LaplacianSharpen;
+pub use wiener::Wiener;
 
 use lumen_core::{EffectRegistry, Result};
 use std::sync::Arc;
@@ -19,6 +21,7 @@ use std::sync::Arc;
 /// Register every effect this crate provides.
 pub fn register_all(registry: &EffectRegistry) -> Result<()> {
     registry.register(Arc::new(LaplacianSharpen))?;
+    registry.register(Arc::new(Wiener))?;
     Ok(())
 }
 

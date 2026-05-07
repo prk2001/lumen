@@ -9,9 +9,13 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(rust_2018_idioms)]
 
+pub mod bilateral;
 pub mod gaussian;
+pub mod median;
 
+pub use bilateral::Bilateral;
 pub use gaussian::GaussianDenoise;
+pub use median::Median;
 
 use lumen_core::{EffectRegistry, Result};
 use std::sync::Arc;
@@ -19,6 +23,8 @@ use std::sync::Arc;
 /// Register every effect this crate provides.
 pub fn register_all(registry: &EffectRegistry) -> Result<()> {
     registry.register(Arc::new(GaussianDenoise))?;
+    registry.register(Arc::new(Bilateral))?;
+    registry.register(Arc::new(Median))?;
     Ok(())
 }
 

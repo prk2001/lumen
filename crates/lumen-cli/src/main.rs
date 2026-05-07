@@ -11,11 +11,14 @@
 //!   re-renders on file changes and shows side-by-side input / output.
 
 mod auto;
+mod batch;
 mod clarify;
 mod colorize;
 mod presets;
+mod project;
 mod serve;
 mod smart;
+mod stack;
 mod video_pipeline;
 
 use std::path::PathBuf;
@@ -45,6 +48,24 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectCommand {
+    /// Pretty-print a `.lumenproj` file's metadata.
+    Show {
+        /// Path to the `.lumenproj` file.
+        path: PathBuf,
+    },
+    /// Run a project's graph against the first still-image asset.
+    Run {
+        /// Path to the `.lumenproj` file.
+        #[arg(long)] project: PathBuf,
+        /// Output file path.
+        #[arg(long)] output: PathBuf,
+        /// JPEG quality (1-100), used only when output is JPEG.
+        #[arg(long, default_value_t = 92)] jpeg_quality: u8,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -81,6 +102,10 @@ enum Command {
         /// JPEG quality (1–100), used only when output is JPEG.
         #[arg(long, default_value_t = 92)]
         jpeg_quality: u8,
+        /// Optional directory to write a PNG snapshot after each
+        /// effect runs. Useful for diagnosing "the pipeline went crazy
+        /// at step 4". Files are named `NN-effect_id.png`.
+        #[arg(long)] save_stages: Option<PathBuf>,
     },
     /// Run a live-preview HTTP server that re-renders the recipe on
     /// file changes and shows input/output side-by-side at /.
@@ -186,6 +211,41 @@ enum Command {
         /// of running it.
         #[arg(long)] print_recipe: bool,
     },
+    /// Combine multiple photos of the same scene into one.
+    ///
+    /// All inputs must have identical dimensions. Phase 1 stacking is
+    /// unaligned — feed tripod-stable or already-aligned inputs.
+    /// Modes: mean (average — best for noise reduction), median
+    /// (drops transient occlusions), max (star trails), min.
+    Stack {
+        /// Two or more input image paths.
+        #[arg(long = "input", value_name = "PATH", num_args = 1..)]
+        inputs: Vec<PathBuf>,
+        #[arg(long)] output: PathBuf,
+        /// Stacking mode: mean | median | max | min.
+        #[arg(long, default_value = "mean")] mode: String,
+    },
+    /// Apply a recipe to every image in a folder.
+    ///
+    /// Walks --input-dir for image files (png/jpg/tif/webp/bmp/raw),
+    /// runs the recipe against each, and writes outputs to --output-dir
+    /// with the same filename. Existing outputs are skipped unless
+    /// --force is passed. Parallel via rayon.
+    Batch {
+        #[arg(long)] input_dir: PathBuf,
+        #[arg(long)] output_dir: PathBuf,
+        /// Recipe JSON file. The `input` and `output` fields are
+        /// overridden per-image.
+        #[arg(long)] recipe: PathBuf,
+        /// Re-run even if an output already exists.
+        #[arg(long, default_value_t = false)] force: bool,
+        #[arg(long, default_value_t = 92)] jpeg_quality: u8,
+    },
+    /// Operate on a `.lumenproj` project file.
+    Project {
+        #[command(subcommand)]
+        sub: ProjectCommand,
+    },
     /// Heuristic colorization — channel_isolate(luma) -> duotone with
     /// a chosen palette, plus CLAHE + sharpen. No model required.
     ///
@@ -251,7 +311,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Apply { input, output, effect, params, jpeg_quality } => {
             cmd_apply(&input, &output, &effect, &params, jpeg_quality)
         }
-        Command::Pipeline { recipe, jpeg_quality } => cmd_pipeline(&recipe, jpeg_quality),
+        Command::Pipeline { recipe, jpeg_quality, save_stages } => {
+            cmd_pipeline(&recipe, jpeg_quality, save_stages.as_deref())
+        }
         Command::Serve { recipe, port, jpeg_quality } => {
             let registry = build_registry()?;
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -297,7 +359,46 @@ fn run(cli: Cli) -> Result<()> {
         Command::Colorize { input, output, palette, print_recipe } => {
             cmd_colorize(&input, &output, &palette, print_recipe)
         }
+        Command::Batch { input_dir, output_dir, recipe, force, jpeg_quality } => {
+            cmd_batch(&input_dir, &output_dir, &recipe, force, jpeg_quality)
+        }
+        Command::Stack { inputs, output, mode } => {
+            stack::cmd_stack(&inputs, &output, &mode)
+        }
+        Command::Project { sub } => match sub {
+            ProjectCommand::Show { path } => project::cmd_project_show(&path),
+            ProjectCommand::Run { project: p, output, jpeg_quality } => {
+                project::cmd_project_run(&p, &output, jpeg_quality)
+            }
+        },
     }
+}
+
+fn cmd_batch(
+    input_dir: &std::path::Path,
+    output_dir: &std::path::Path,
+    recipe_path: &std::path::Path,
+    force: bool,
+    jpeg_quality: u8,
+) -> Result<()> {
+    let s = std::fs::read_to_string(recipe_path)
+        .with_context(|| format!("reading recipe {}", recipe_path.display()))?;
+    let recipe: Recipe = serde_json::from_str(&s)
+        .with_context(|| format!("parsing recipe {}", recipe_path.display()))?;
+    let stats = batch::run_batch(
+        input_dir,
+        output_dir,
+        &recipe,
+        batch::BatchOptions { force, jpeg_quality, out_ext: None },
+    )?;
+    eprintln!(
+        "batch: {} processed, {} skipped, {} failed",
+        stats.processed, stats.skipped, stats.failed
+    );
+    if stats.failed > 0 {
+        anyhow::bail!("batch had {} failures", stats.failed);
+    }
+    Ok(())
 }
 
 fn cmd_colorize(
@@ -370,8 +471,84 @@ fn cmd_smart(
 
 // ─── Auto-enhance + clarify dispatch ─────────────────────────────────────
 
-fn run_chain_in_memory(recipe: &Recipe) -> Result<()> {
+pub(crate) fn run_chain_in_memory(recipe: &Recipe) -> Result<()> {
+    run_chain_in_memory_with_stages(recipe, None)
+}
+
+/// Run the chain. If `stages_dir` is `Some`, also write a PNG snapshot
+/// to that directory after every effect: `00-input.png`, `01-<label>.png`,
+/// `02-<label>.png`, …, `NN-output.png`. Lets users see exactly where a
+/// pipeline goes wrong.
+pub(crate) fn run_chain_in_memory_with_stages(
+    recipe: &Recipe,
+    stages_dir: Option<&std::path::Path>,
+) -> Result<()> {
     let registry = build_registry()?;
+
+    if let Some(dir) = stages_dir {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("creating stages dir {}", dir.display()))?;
+    }
+
+    // If we want stages, we run effects sequentially ourselves so we can
+    // capture each intermediate frame. Otherwise use the Scheduler.
+    if let Some(dir) = stages_dir {
+        // Sequential execution path with stage capture.
+        let mut frame = decode_image(&recipe.input).map_err(|e| anyhow!("decode: {e}"))?;
+        let stage_path = dir.join("00-input.png");
+        encode_image(
+            frame.clone(),
+            &stage_path,
+            ImageEncodeOptions::default(),
+        )
+        .map_err(|e| anyhow!("write stage 00: {e}"))?;
+        eprintln!("stage 00 input -> {}", stage_path.display());
+
+        let mut ctx = Context::for_still_srgb();
+        for (i, step) in recipe.chain.iter().enumerate() {
+            let effect = registry
+                .get(&step.effect)
+                .ok_or_else(|| anyhow!("effect '{}' not in registry", step.effect))?;
+            let mut params = ParamValues::new();
+            if let serde_json::Value::Object(map) = &step.params {
+                for (k, v) in map {
+                    let pv = json_to_param(v).ok_or_else(|| {
+                        anyhow!("step {i}: param '{k}' has unsupported JSON type")
+                    })?;
+                    params.insert(k.clone(), pv);
+                }
+            }
+            params
+                .validate_and_fill(effect.parameters())
+                .map_err(|e| anyhow!("step {i} params: {e}"))?;
+            frame = effect
+                .apply(&mut ctx, frame, &params)
+                .map_err(|e| anyhow!("step {i} apply: {e}"))?;
+            let safe_label = step
+                .effect
+                .replace('.', "_")
+                .replace(['/', '\\', ' '], "_");
+            let stage_path = dir.join(format!("{:02}-{}.png", i + 1, safe_label));
+            encode_image(
+                frame.clone(),
+                &stage_path,
+                ImageEncodeOptions::default(),
+            )
+            .map_err(|e| anyhow!("write stage {}: {e}", i + 1))?;
+            eprintln!("stage {:02} {} -> {}", i + 1, step.effect, stage_path.display());
+        }
+
+        // Final output
+        encode_image(
+            frame,
+            &recipe.output,
+            ImageEncodeOptions { jpeg_quality: 92, format: None },
+        )
+        .map_err(|e| anyhow!("encode final: {e}"))?;
+        return Ok(());
+    }
+
+    // No stages requested — use the Scheduler.
     let mut graph = Graph::new();
     let src_node = graph.insert(Node::new(special_effect_ids::SOURCE, "source"));
     let mut prev = src_node;
@@ -850,7 +1027,7 @@ fn cmd_apply(
 
 /// Linear-chain recipe format. Phase 1 supports linear chains only;
 /// branched DAGs land alongside multi-input effects in Phase 3.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Recipe {
     /// Input file path (relative to the recipe file or absolute).
     pub input: PathBuf,
@@ -860,7 +1037,7 @@ pub(crate) struct Recipe {
     pub chain: Vec<RecipeStep>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RecipeStep {
     /// Effect id (e.g. `"lumen-fx-denoise.gaussian"`).
     pub effect: String,
@@ -872,10 +1049,14 @@ pub(crate) struct RecipeStep {
     pub params: serde_json::Value,
 }
 
-fn cmd_pipeline(recipe_path: &std::path::Path, jpeg_quality: u8) -> Result<()> {
+fn cmd_pipeline(
+    recipe_path: &std::path::Path,
+    jpeg_quality: u8,
+    save_stages: Option<&std::path::Path>,
+) -> Result<()> {
     let recipe_str = std::fs::read_to_string(recipe_path)
         .with_context(|| format!("reading recipe {}", recipe_path.display()))?;
-    let recipe: Recipe = serde_json::from_str(&recipe_str).with_context(|| {
+    let mut recipe: Recipe = serde_json::from_str(&recipe_str).with_context(|| {
         format!("parsing recipe {} as JSON", recipe_path.display())
     })?;
 
@@ -891,68 +1072,13 @@ fn cmd_pipeline(recipe_path: &std::path::Path, jpeg_quality: u8) -> Result<()> {
             base.join(p)
         }
     };
-    let input_path = resolve(&recipe.input);
-    let output_path = resolve(&recipe.output);
+    recipe.input = resolve(&recipe.input);
+    recipe.output = resolve(&recipe.output);
+    let _ = jpeg_quality; // wired through recipe defaults; future flag work
 
-    let registry = build_registry()?;
-
-    // Build the linear graph.
-    let mut graph = Graph::new();
-    let src_node = graph.insert(Node::new(special_effect_ids::SOURCE, "source"));
-    let mut prev = src_node;
-    for (i, step) in recipe.chain.iter().enumerate() {
-        let mut params = ParamValues::new();
-        if let serde_json::Value::Object(map) = &step.params {
-            for (k, v) in map {
-                params.insert(k.clone(), json_to_param(v).ok_or_else(|| {
-                    anyhow!("step {i}: param '{k}' has unsupported JSON type")
-                })?);
-            }
-        }
-        let label = step
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("step{i:02}"));
-        let node = graph.insert(
-            Node::new(step.effect.clone(), label).with_input(prev).with_params(params),
-        );
-        prev = node;
-    }
-    let sink_node = graph.insert(
-        Node::new(special_effect_ids::SINK, "sink").with_input(prev),
-    );
-    graph.add_sink(sink_node);
-
-    // Execute via Scheduler.
-    let mut ctx = Context::for_still_srgb();
-    let written = std::cell::RefCell::new(None::<PathBuf>);
-
-    let source = CliSource(|_id: NodeId, _params: &ParamValues| -> lumen_core::Result<Frame> {
-        decode_image(&input_path)
-    });
-    let sink = CliSink(|_id: NodeId, _params: &ParamValues, frame: Frame| -> lumen_core::Result<()> {
-        let p = encode_image(
-            frame,
-            &output_path,
-            ImageEncodeOptions { jpeg_quality, format: None },
-        )?;
-        *written.borrow_mut() = Some(p);
-        Ok(())
-    });
-    let mut sched = Scheduler {
-        registry: &registry,
-        ctx: &mut ctx,
-        source_loader: source,
-        sink_writer: sink,
-    };
-
-    sched
-        .run(&graph)
+    run_chain_in_memory_with_stages(&recipe, save_stages)
         .map_err(|e| anyhow!("pipeline run failed: {e}"))?;
-
-    if let Some(p) = written.into_inner() {
-        println!("wrote {}", p.display());
-    }
+    println!("wrote {}", recipe.output.display());
     Ok(())
 }
 

@@ -35,6 +35,7 @@ lumen-qa = { path = "../lumen-qa" }
 tokio.workspace = true
 axum.workspace = true
 time = { workspace = true }
+rayon.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

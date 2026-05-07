@@ -2155,6 +2155,7 @@ dependencies = [
  "lumen-measure",
  "lumen-qa",
  "lumen-report",
+ "rayon",
  "serde",
  "serde_json",
  "tempfile",
@@ -2256,6 +2257,7 @@ name = "lumen-fx-deblur"
 version = "0.1.0"
 dependencies = [
  "lumen-core",
+ "rustfft",
  "thiserror 1.0.69",
  "tracing",
 ]

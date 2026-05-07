@@ -1,9 +1,9 @@
-//! Bicubic upscale with the Mitchell-Netravali kernel.
+//! Catmull-Rom upscale.
 //!
-//! Default `B=1/3, C=1/3` — Mitchell's recommended defaults. Sharper
-//! profiles (Catmull-Rom B=0,C=0.5) and softer (B=1,C=0) are
-//! parameterizable but kept minimal for Phase 1; AI upscalers in Phase
-//! 2 supersede this for high-quality work.
+//! Catmull-Rom is the standard sharper bicubic — `B = 0, C = 0.5` in the
+//! Mitchell-Netravali parameterization. It gives crisper edges than the
+//! Mitchell defaults at the cost of mild ringing/overshoot, which is
+//! often desirable for photographic upscales.
 
 use lumen_core::{
     Capabilities, Category, Context, Effect, EffectMetadata, Frame, ParamKind, ParamSpec,
@@ -12,12 +12,12 @@ use lumen_core::{
 use tracing::instrument;
 
 #[derive(Debug, Default)]
-pub struct Bicubic;
+pub struct CatmullRom;
 
 const META: EffectMetadata = EffectMetadata {
-    id: "lumen-fx-upscale.bicubic",
-    display_name: "Bicubic Upscale",
-    description: "Mitchell-Netravali bicubic resample to a scale factor.",
+    id: "lumen-fx-upscale.catmull_rom",
+    display_name: "Catmull-Rom Upscale",
+    description: "Catmull-Rom bicubic resample (B=0, C=1/2) — sharper than Mitchell.",
     category: Category::Upscale,
     version: 1,
 };
@@ -33,7 +33,7 @@ const PARAMS: &[ParamSpec] = &[ParamSpec {
     },
 }];
 
-impl Effect for Bicubic {
+impl Effect for CatmullRom {
     fn metadata(&self) -> &EffectMetadata {
         &META
     }
@@ -67,18 +67,14 @@ impl Effect for Bicubic {
         let x_ratio = src_w as f32 / dst_w as f32;
         let y_ratio = src_h as f32 / dst_h as f32;
 
-        // Precompute kernel weights per output column for the horizontal
-        // pass (separable bicubic: sample 4 rows, then weight vertically).
         let mut row_buf = vec![0.0f32; dst_w * 4];
-        let mut sampled_rows = vec![0.0f32; 4 * dst_w * 4]; // 4 rows x dst_w pixels x 4 channels
+        let mut sampled_rows = vec![0.0f32; 4 * dst_w * 4];
 
         for ty in 0..dst_h {
             let sy = (ty as f32 + 0.5) * y_ratio - 0.5;
             let sy_floor = sy.floor() as isize;
             let fy = sy - sy_floor as f32;
 
-            // Sample 4 source rows, doing horizontal interpolation into
-            // sampled_rows (sy_floor-1, sy_floor, sy_floor+1, sy_floor+2).
             for k in 0..4 {
                 let row_idx = (sy_floor + k - 1).clamp(0, src_h as isize - 1) as usize;
                 let src_row = &src[row_idx * stride_src..(row_idx + 1) * stride_src];
@@ -93,7 +89,7 @@ impl Effect for Bicubic {
                     let mut acc = [0.0f32; 4];
                     for j in 0..4 {
                         let xi = (sx_floor + j - 1).clamp(0, src_w as isize - 1) as usize;
-                        let w = mitchell((j as f32 - 1.0) - fx);
+                        let w = catmull_rom((j as f32 - 1.0) - fx);
                         let p = &src_row[xi * 4..xi * 4 + 4];
                         acc[0] += p[0] * w;
                         acc[1] += p[1] * w;
@@ -108,11 +104,10 @@ impl Effect for Bicubic {
                 }
             }
 
-            // Vertical pass through the 4 rows.
             for tx in 0..dst_w {
                 let mut acc = [0.0f32; 4];
                 for k in 0..4 {
-                    let w = mitchell((k as f32 - 1.0) - fy);
+                    let w = catmull_rom((k as f32 - 1.0) - fy);
                     let off = k * dst_w * 4 + tx * 4;
                     acc[0] += sampled_rows[off] * w;
                     acc[1] += sampled_rows[off + 1] * w;
@@ -140,10 +135,13 @@ impl Effect for Bicubic {
     }
 }
 
-/// Mitchell-Netravali kernel with B = C = 1/3.
-fn mitchell(x: f32) -> f32 {
-    const B: f32 = 1.0 / 3.0;
-    const C: f32 = 1.0 / 3.0;
+/// Catmull-Rom kernel — Mitchell-Netravali with `B = 0, C = 1/2`.
+///
+/// Inlined rather than calling a generic Mitchell helper so the constants
+/// fold at compile time.
+fn catmull_rom(x: f32) -> f32 {
+    const B: f32 = 0.0;
+    const C: f32 = 0.5;
     let x = x.abs();
     if x < 1.0 {
         ((12.0 - 9.0 * B - 6.0 * C) * x.powi(3)
@@ -164,15 +162,16 @@ fn mitchell(x: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Bicubic;
     use lumen_core::{ColorSpace, ParamValue};
 
     #[test]
     fn doubles_dimensions() {
-        let b = Bicubic;
+        let cr = CatmullRom;
         let mut ctx = Context::for_still_srgb();
         let mut p = ParamValues::new();
         p.insert("scale", ParamValue::Float(2.0));
-        p.validate_and_fill(b.parameters()).unwrap();
+        p.validate_and_fill(cr.parameters()).unwrap();
 
         let f = Frame::new(
             8,
@@ -182,32 +181,120 @@ mod tests {
             None,
         )
         .unwrap();
-        let out = b.apply(&mut ctx, f, &p).unwrap();
+        let out = cr.apply(&mut ctx, f, &p).unwrap();
         assert_eq!(out.width, 16);
         assert_eq!(out.height, 12);
     }
 
     #[test]
-    fn solid_image_unchanged_under_upscale() {
-        let b = Bicubic;
+    fn sharper_than_mitchell_on_step_edge() {
+        // A 1D step edge replicated vertically. Use mid-tones (0.4 -> 0.6
+        // in linear) so that the negative-lobe overshoot/undershoot
+        // stays inside the [0, 1] clamp range and is preserved in the
+        // output. After 2x upscale, Catmull-Rom (C=0.5) should produce
+        // a larger output range than Mitchell (C=1/3) because of its
+        // deeper negative lobes.
+        let w = 16;
+        let h = 4;
+        // 0.4 and 0.6 in linear, encoded to sRGB-u8.
+        // (Frame stores u8 sRGB; `into_rgba_f32_linear` decodes back.)
+        let lo_lin = 0.4f32;
+        let hi_lin = 0.6f32;
+        let lo_u8 = (linear_to_srgb_u8(lo_lin)) as u8;
+        let hi_u8 = (linear_to_srgb_u8(hi_lin)) as u8;
+
+        let mut buf = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x >= w / 2 { hi_u8 } else { lo_u8 };
+                let i = (y * w + x) * 4;
+                buf[i] = v;
+                buf[i + 1] = v;
+                buf[i + 2] = v;
+                buf[i + 3] = 255;
+            }
+        }
+
         let mut ctx = Context::for_still_srgb();
         let mut p = ParamValues::new();
         p.insert("scale", ParamValue::Float(2.0));
-        p.validate_and_fill(b.parameters()).unwrap();
+        p.validate_and_fill(CatmullRom.parameters()).unwrap();
 
-        let f = Frame::new(
-            8,
-            8,
-            PixelData::Rgba8(vec![80; 8 * 8 * 4]),
+        let f_cr = Frame::new(
+            w as u32,
+            h as u32,
+            PixelData::Rgba8(buf.clone()),
             ColorSpace::SRgb,
             None,
         )
         .unwrap();
-        let out = b.apply(&mut ctx, f, &p).unwrap().into_rgba_u8_srgb();
-        let PixelData::Rgba8(px) = out.data else {
-            panic!()
+        let f_mn = Frame::new(
+            w as u32,
+            h as u32,
+            PixelData::Rgba8(buf.clone()),
+            ColorSpace::SRgb,
+            None,
+        )
+        .unwrap();
+
+        let cr_out = CatmullRom.apply(&mut ctx, f_cr, &p).unwrap();
+        let mn_out = Bicubic.apply(&mut ctx, f_mn, &p).unwrap();
+
+        assert_eq!(cr_out.width, mn_out.width);
+        assert_eq!(cr_out.height, mn_out.height);
+
+        // Compare in linear-f32 space (what the kernels operate in).
+        let cr_lin = cr_out.into_rgba_f32_linear();
+        let mn_lin = mn_out.into_rgba_f32_linear();
+        let cr_px = cr_lin.as_f32().unwrap();
+        let mn_px = mn_lin.as_f32().unwrap();
+
+        let stride = cr_lin.width as usize * 4;
+        // Pick an interior row to avoid vertical edge clamp at top/bottom.
+        let row = 2 * stride;
+        let cr_row = &cr_px[row..row + stride];
+        let mn_row = &mn_px[row..row + stride];
+
+        let cr_min = cr_row
+            .iter()
+            .step_by(4)
+            .cloned()
+            .fold(f32::INFINITY, f32::min);
+        let cr_max = cr_row
+            .iter()
+            .step_by(4)
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+        let mn_min = mn_row
+            .iter()
+            .step_by(4)
+            .cloned()
+            .fold(f32::INFINITY, f32::min);
+        let mn_max = mn_row
+            .iter()
+            .step_by(4)
+            .cloned()
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        let cr_range = cr_max - cr_min;
+        let mn_range = mn_max - mn_min;
+
+        // Catmull-Rom's deeper negative lobes produce both a larger
+        // overshoot (above hi) and a deeper undershoot (below lo) than
+        // Mitchell — strictly larger output range.
+        assert!(
+            cr_range > mn_range + 1e-4,
+            "expected Catmull-Rom range {cr_range} > Mitchell range {mn_range}",
+        );
+    }
+
+    /// Linear -> sRGB-u8 round, reusing the standard piecewise formula.
+    fn linear_to_srgb_u8(c: f32) -> u32 {
+        let s = if c <= 0.003_130_8 {
+            12.92 * c
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
         };
-        // Bicubic on a constant image should produce the same constant.
-        assert!(px.iter().all(|&v| (v as i32 - 80).abs() <= 1));
+        (s.clamp(0.0, 1.0) * 255.0).round() as u32
     }
 }

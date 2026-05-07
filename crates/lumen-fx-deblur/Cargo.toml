@@ -9,5 +9,6 @@ repository.workspace = true
 
 [dependencies]
 lumen-core = { path = "../lumen-core" }
+rustfft = "6.2"
 thiserror.workspace = true
 tracing.workspace = true

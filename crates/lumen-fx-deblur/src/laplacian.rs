@@ -35,25 +35,41 @@ const PARAMS: &[ParamSpec] = &[
         id: "amount",
         display_name: "Amount",
         description: "Strength of the Laplacian addition.",
-        kind: ParamKind::Float { default: 1.0, min: Some(0.0), max: Some(4.0) },
+        kind: ParamKind::Float {
+            default: 1.0,
+            min: Some(0.0),
+            max: Some(4.0),
+        },
     },
     ParamSpec {
         id: "sigma",
         display_name: "Sigma",
         description: "Inner Gaussian sigma in pixels.",
-        kind: ParamKind::Float { default: 1.0, min: Some(0.1), max: Some(10.0) },
+        kind: ParamKind::Float {
+            default: 1.0,
+            min: Some(0.1),
+            max: Some(10.0),
+        },
     },
     ParamSpec {
         id: "sigma_ratio",
         display_name: "Sigma Ratio",
         description: "Outer Gaussian sigma is sigma * sigma_ratio.",
-        kind: ParamKind::Float { default: 1.6, min: Some(1.1), max: Some(5.0) },
+        kind: ParamKind::Float {
+            default: 1.6,
+            min: Some(1.1),
+            max: Some(5.0),
+        },
     },
 ];
 
 impl Effect for LaplacianSharpen {
-    fn metadata(&self) -> &EffectMetadata { &META }
-    fn parameters(&self) -> &[ParamSpec] { PARAMS }
+    fn metadata(&self) -> &EffectMetadata {
+        &META
+    }
+    fn parameters(&self) -> &[ParamSpec] {
+        PARAMS
+    }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             deterministic: true,
@@ -144,8 +160,8 @@ fn gaussian_blur_rgba(buf: &mut [f32], w: usize, h: usize, kernel: &[f32]) {
         for x in 0..w {
             let mut acc = [0.0f32; 4];
             for (i, &k) in kernel.iter().enumerate() {
-                let xi = (x as isize + i as isize - half as isize)
-                    .clamp(0, w as isize - 1) as usize;
+                let xi =
+                    (x as isize + i as isize - half as isize).clamp(0, w as isize - 1) as usize;
                 let p = &row[xi * 4..xi * 4 + 4];
                 acc[0] += p[0] * k;
                 acc[1] += p[1] * k;
@@ -165,8 +181,8 @@ fn gaussian_blur_rgba(buf: &mut [f32], w: usize, h: usize, kernel: &[f32]) {
         for x in 0..w {
             let mut acc = [0.0f32; 4];
             for (i, &k) in kernel.iter().enumerate() {
-                let yi = (y as isize + i as isize - half as isize)
-                    .clamp(0, h as isize - 1) as usize;
+                let yi =
+                    (y as isize + i as isize - half as isize).clamp(0, h as isize - 1) as usize;
                 let off = yi * stride + x * 4;
                 acc[0] += temp[off] * k;
                 acc[1] += temp[off + 1] * k;
@@ -210,7 +226,9 @@ mod tests {
 
         // Pixel data should be byte-for-byte unchanged.
         let out8 = out.into_rgba_u8_srgb();
-        let PixelData::Rgba8(px) = out8.data else { panic!() };
+        let PixelData::Rgba8(px) = out8.data else {
+            panic!()
+        };
         assert!(px.iter().all(|&v| v == 100));
     }
 
@@ -236,7 +254,9 @@ mod tests {
         .unwrap();
         let out = lap.apply(&mut ctx, solid, &p).unwrap();
         let out8 = out.into_rgba_u8_srgb();
-        let PixelData::Rgba8(px) = out8.data else { panic!() };
+        let PixelData::Rgba8(px) = out8.data else {
+            panic!()
+        };
         // Allow ±1 for f32 round-trip through the sRGB transfer.
         assert!(
             px.iter().all(|&v| (v as i32 - 80).abs() <= 1),
@@ -287,7 +307,9 @@ mod tests {
         .unwrap();
         let out = lap.apply(&mut ctx, f, &p).unwrap();
         let out8 = out.into_rgba_u8_srgb();
-        let PixelData::Rgba8(px) = out8.data else { panic!() };
+        let PixelData::Rgba8(px) = out8.data else {
+            panic!()
+        };
 
         // Sample the bright pixel just to the right of the edge and the
         // dark pixel just to the left of the edge, on the middle row.
